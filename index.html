@@ -965,9 +965,17 @@
       transition: color 0.3s ease;
     }
 
-    .ctrl-badge.badge-auto { color: #4ade80; }
-    .ctrl-badge.badge-on   { color: #fbbf24; }
-    .ctrl-badge.badge-off  { color: #f87171; }
+    .ctrl-badge.badge-auto {
+      color: #4ade80;
+    }
+
+    .ctrl-badge.badge-on {
+      color: #fbbf24;
+    }
+
+    .ctrl-badge.badge-off {
+      color: #f87171;
+    }
 
     /* Small pulse while a cloud sync is still queued/in flight */
     .ctrl-badge.syncing {
@@ -975,8 +983,15 @@
     }
 
     @keyframes ctrlPulse {
-      0%, 100% { opacity: 1; }
-      50%      { opacity: 0.4; }
+
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: 0.4;
+      }
     }
 
     /* ═══════════════════════════════════════════════
@@ -1061,8 +1076,8 @@
         <div class="ctrl-wrap">
           <span class="ctrl-label">CTRL</span>
           <button class="ctrl-btn active-auto" id="btnAuto">AUTO</button>
-          <button class="ctrl-btn"             id="btnOn">ON</button>
-          <button class="ctrl-btn"             id="btnOff">OFF</button>
+          <button class="ctrl-btn" id="btnOn">ON</button>
+          <button class="ctrl-btn" id="btnOff">OFF</button>
           <span class="ctrl-badge badge-auto" id="ctrlBadge">AUTO MODE</span>
         </div>
       </div>
@@ -1283,24 +1298,24 @@
     //  Either way the wire format is identical, so the ESP8266 and the
     //  Arduino cannot tell the difference and need no changes.
     // ═══════════════════════════════════════════════════════════════════
-    const TS_API   = 'https://api.thingspeak.com';
+    const TS_API = 'https://api.thingspeak.com';
     const API_BASE = 'api';          // relative, so any mount path works
 
     const CONFIG = {
       // Populated by resolveConfig() before the read loop starts.
-      MODE:           'unconfigured',   // 'proxy' | 'direct' | 'unconfigured'
-      SOURCE:         'none',           // where the values came from
-      CHANNEL_ID:     '',
-      READ_API_KEY:   '',               // optional: public channels need none
-      WRITE_API_KEY:  '',
-      TOKEN:          '',               // optional /api/update shared secret
+      MODE: 'unconfigured',   // 'proxy' | 'direct' | 'unconfigured'
+      SOURCE: 'none',           // where the values came from
+      CHANNEL_ID: 3245023,
+      READ_API_KEY: 'YOJBSOZM224V8FF9',               // optional: public channels need none
+      WRITE_API_KEY: 'XLCBYQ4201OUOTVZ',
+      TOKEN: '',               // optional /api/update shared secret
       REQUIRES_TOKEN: false,
 
-      READ_INTERVAL_MS: 16000,    // feed poll (free tier minimum is 15 s)
+      READ_INTERVAL_MS: 5000,    // feed poll (free tier minimum is 5 s)
       MIN_WRITE_GAP_MS: 16000,    // client-side write throttle
-      HW_TIMEOUT_MS:   150000,    // no ESP entry for this long -> offline
-      CLICK_GRACE_MS:    3000,    // ignore cloud light changes right after a click
-      MAX_LOG_LINES:       120,
+      HW_TIMEOUT_MS: 150000,    // no ESP entry for this long -> offline
+      CLICK_GRACE_MS: 3000,    // ignore cloud light changes right after a click
+      MAX_LOG_LINES: 120,
     };
 
     // ═══════════════════════════════════════════════════════════════════
@@ -1336,40 +1351,40 @@
     //  keeps its own MANUAL mode in RAM, so its display stays latched.
     // ═══════════════════════════════════════════════════════════════════
 
-    const MODE  = { AUTO: 'AUTO', MANUAL: 'MANUAL' };
+    const MODE = { AUTO: 'AUTO', MANUAL: 'MANUAL' };
     const LIGHT = { ON: 'ON', OFF: 'OFF', UNKNOWN: 'UNKNOWN' };
-    const LDR   = { DARK: 'DARK', BRIGHT: 'BRIGHT', UNKNOWN: 'UNKNOWN' };
+    const LDR = { DARK: 'DARK', BRIGHT: 'BRIGHT', UNKNOWN: 'UNKNOWN' };
 
     // ═══════════════════════════════════════════════════════════════════
     //  STATE — website state and hardware state are deliberately separate
     // ═══════════════════════════════════════════════════════════════════
     const state = {
       // What the website shows. This drives the room, bulb and cards.
-      controlMode:        MODE.AUTO,
-      websiteLightState:  LIGHT.UNKNOWN,
+      controlMode: MODE.AUTO,
+      websiteLightState: LIGHT.UNKNOWN,
 
       // What the hardware last reported. Display only — it never forces
       // websiteLightState off.
       hardwareLightState: LIGHT.UNKNOWN,
-      ldrState:           LDR.UNKNOWN,   // real LDR from ThingSpeak F1
+      ldrState: LDR.UNKNOWN,   // real LDR from ThingSpeak F1
 
       // Local test override. Null = use the real LDR.
-      simulatedLdr:       null,
+      simulatedLdr: null,
 
       // Link health. `checked` stays false until the first read resolves so
       // the badges can say "…" instead of falsely claiming OFFLINE.
-      hardwareConnected:  false,
-      cloudConnected:     false,
-      linkChecked:        false,
+      hardwareConnected: false,
+      cloudConnected: false,
+      linkChecked: false,
 
       // Last VALID field values (null is never coerced to 0).
       f1: null, f2: null, f3: null,
 
-      lastEntryId:      null,
-      lastHwEntryAt:    0,     // when an ESP-authored entry last arrived
+      lastEntryId: null,
+      lastHwEntryAt: 0,     // when an ESP-authored entry last arrived
       lastUserActionAt: 0,
-      ownWriteIds:      [],    // entry ids WE wrote, newest last
-      readTimer:        null,
+      ownWriteIds: [],    // entry ids WE wrote, newest last
+      readTimer: null,
     };
 
     // ═══════════════════════════════════════════════════════════════════
@@ -1388,28 +1403,28 @@
     const $ = id => document.getElementById(id);
 
     const dom = {
-      room:        $('roomScene'),
-      roomLabel:   $('roomLabel'),
-      roomNotice:  $('roomNotice'),
-      bulbGlass:   $('bulbGlass'),
-      bulbInner:   $('bulbInnerGlow'),
-      filament:    $('filament'),
-      filWireL:    $('filWireL'),
-      filWireR:    $('filWireR'),
+      room: $('roomScene'),
+      roomLabel: $('roomLabel'),
+      roomNotice: $('roomNotice'),
+      bulbGlass: $('bulbGlass'),
+      bulbInner: $('bulbInnerGlow'),
+      filament: $('filament'),
+      filWireL: $('filWireL'),
+      filWireR: $('filWireR'),
 
-      cloudBadge:  $('cloudBadge'),
-      cloudLabel:  $('cloudLabel'),
-      hwBadge:     $('hwBadge'),
-      hwLabel:     $('hwLabel'),
+      cloudBadge: $('cloudBadge'),
+      cloudLabel: $('cloudLabel'),
+      hwBadge: $('hwBadge'),
+      hwLabel: $('hwLabel'),
       chIdDisplay: $('chIdDisplay'),
-      lastUpdate:  $('lastUpdateLabel'),
+      lastUpdate: $('lastUpdateLabel'),
 
       cardRelay: $('cardRelay'), dotRelay: $('dotRelay'), valRelay: $('valRelay'),
-      cardLed:   $('cardLed'),   dotLed:   $('dotLed'),   valLed:   $('valLed'),
-      cardLdr:   $('cardLdr'),   dotLdr:   $('dotLdr'),   valLdr:   $('valLdr'),
+      cardLed: $('cardLed'), dotLed: $('dotLed'), valLed: $('valLed'),
+      cardLdr: $('cardLdr'), dotLdr: $('dotLdr'), valLdr: $('valLdr'),
       hwRelayVal: $('hwRelayVal'),
-      hwLedVal:   $('hwLedVal'),
-      ldrSource:  $('ldrSource'),
+      hwLedVal: $('hwLedVal'),
+      ldrSource: $('ldrSource'),
 
       tsF1: $('tsF1'), tsF2: $('tsF2'), tsF3: $('tsF3'),
       tsEntryId: $('tsEntryId'), tsCreatedAt: $('tsCreatedAt'),
@@ -1467,7 +1482,7 @@
     /** What AUTO implies for the effective LDR. */
     function autoLight() {
       const l = effectiveLdr();
-      if (l === LDR.DARK)   return LIGHT.ON;
+      if (l === LDR.DARK) return LIGHT.ON;
       if (l === LDR.BRIGHT) return LIGHT.OFF;
       return LIGHT.UNKNOWN;
     }
@@ -1477,7 +1492,7 @@
      * has never reported one. The simulation is never written to the cloud.
      */
     function realLdrBit() {
-      if (state.ldrState === LDR.DARK)   return 1;
+      if (state.ldrState === LDR.DARK) return 1;
       if (state.ldrState === LDR.BRIGHT) return 0;
       return null;
     }
@@ -1511,7 +1526,7 @@
       if (up === state.cloudConnected) return false;
       state.cloudConnected = up;
       log(up ? '[TS] THINGSPEAK CONNECTED' : '[TS] THINGSPEAK OFFLINE',
-          up ? 'green' : 'red');
+        up ? 'green' : 'red');
       if (!up) log('[UI] Website state preserved — nothing reset', 'dim');
       bus.emit('cloud');
       return true;
@@ -1543,7 +1558,7 @@
       const on = state.websiteLightState === LIGHT.ON;
 
       dom.room.classList.toggle('light-on', on);
-      dom.room.classList.toggle('bright',   on);
+      dom.room.classList.toggle('bright', on);
 
       if (on) {
         dom.bulbGlass.setAttribute('fill', '#fbbf24');
@@ -1567,13 +1582,13 @@
       const known = state.websiteLightState !== LIGHT.UNKNOWN;
 
       dom.cardRelay.className = 'status-card' + (on ? ' active' : '');
-      dom.dotRelay.className  = 'status-dot'  + (on ? ' green'  : '');
-      dom.valRelay.className  = 'card-value'  + (on ? ' on-val' : '');
+      dom.dotRelay.className = 'status-dot' + (on ? ' green' : '');
+      dom.valRelay.className = 'card-value' + (on ? ' on-val' : '');
       dom.valRelay.textContent = known ? (on ? 'ON' : 'OFF') : '—';
 
       dom.cardLed.className = 'status-card' + (on ? ' active' : '');
-      dom.dotLed.className  = 'status-dot'  + (on ? ' green'  : '');
-      dom.valLed.className  = 'card-value'  + (on ? ' on-val' : '');
+      dom.dotLed.className = 'status-dot' + (on ? ' green' : '');
+      dom.valLed.className = 'card-value' + (on ? ' on-val' : '');
       dom.valLed.textContent = known ? (on ? 'ON' : 'OFF') : '—';
 
       renderRoomLabel();
@@ -1593,31 +1608,31 @@
     }
 
     function renderLdr() {
-      const l   = effectiveLdr();
+      const l = effectiveLdr();
       const sim = state.simulatedLdr !== null;
 
       if (l === LDR.DARK) {
         dom.cardLdr.className = 'status-card ldr-dark';
-        dom.dotLdr.className  = 'status-dot purple';
-        dom.valLdr.className  = 'card-value dark-val';
+        dom.dotLdr.className = 'status-dot purple';
+        dom.valLdr.className = 'card-value dark-val';
         dom.valLdr.textContent = 'DARK (1)';
       } else if (l === LDR.BRIGHT) {
         dom.cardLdr.className = 'status-card ldr-bright';
-        dom.dotLdr.className  = 'status-dot amber';
-        dom.valLdr.className  = 'card-value bright-val';
+        dom.dotLdr.className = 'status-dot amber';
+        dom.valLdr.className = 'card-value bright-val';
         dom.valLdr.textContent = 'BRIGHT (0)';
       } else {
         dom.cardLdr.className = 'status-card';
-        dom.dotLdr.className  = 'status-dot';
-        dom.valLdr.className  = 'card-value';
+        dom.dotLdr.className = 'status-dot';
+        dom.valLdr.className = 'card-value';
         dom.valLdr.textContent = '—';
       }
 
       dom.ldrSource.textContent = sim ? 'SIMULATED'
-                                      : (state.ldrState === LDR.UNKNOWN ? 'no data'
-                                                                        : 'hardware');
+        : (state.ldrState === LDR.UNKNOWN ? 'no data'
+          : 'hardware');
 
-      dom.btnSimDark.className   = 'sim-btn' +
+      dom.btnSimDark.className = 'sim-btn' +
         (state.simulatedLdr === LDR.DARK ? ' active-dark' : '');
       dom.btnSimBright.className = 'sim-btn' +
         (state.simulatedLdr === LDR.BRIGHT ? ' active-bright' : '');
@@ -1672,7 +1687,7 @@
     function renderHardwareReadout() {
       const fmt = v => (v === null ? '—' : (v === 1 ? 'ON (1)' : 'OFF (0)'));
       dom.hwRelayVal.textContent = fmt(state.f2);
-      dom.hwLedVal.textContent   = fmt(state.f3);
+      dom.hwLedVal.textContent = fmt(state.f3);
 
       dom.tsF1.textContent = state.f1 === null ? '—' : state.f1;
       dom.tsF2.textContent = state.f2 === null ? '—' : state.f2;
@@ -1680,14 +1695,14 @@
     }
 
     // Wire the renderers to the bus.
-    bus.on('light',    renderLight);
-    bus.on('light',    renderControls);
-    bus.on('mode',     renderControls);
-    bus.on('mode',     renderLight);
-    bus.on('ldr',      renderLdr);
-    bus.on('cloud',    renderBadges);
+    bus.on('light', renderLight);
+    bus.on('light', renderControls);
+    bus.on('mode', renderControls);
+    bus.on('mode', renderLight);
+    bus.on('ldr', renderLdr);
+    bus.on('cloud', renderBadges);
     bus.on('hardware', renderBadges);
-    bus.on('feed',     renderHardwareReadout);
+    bus.on('feed', renderHardwareReadout);
 
     function renderAll() {
       renderLight();
@@ -1733,10 +1748,10 @@
       renderAll();
 
       log('[LDR] ' + effectiveLdr() +
-          (state.simulatedLdr !== null ? '  (simulated)' : ''),
-          effectiveLdr() === LDR.DARK ? 'purple' : 'amber');
+        (state.simulatedLdr !== null ? '  (simulated)' : ''),
+        effectiveLdr() === LDR.DARK ? 'purple' : 'amber');
       log('[LIGHT] ' + (next === LIGHT.UNKNOWN ? 'UNKNOWN — no LDR data yet' : next),
-          next === LIGHT.ON ? 'green' : 'grey');
+        next === LIGHT.ON ? 'green' : 'grey');
 
       // 2. Tell the hardware to resume AUTO. Writing F1=F2=F3=latest LDR
       //    is exactly what AUTO produces, which the ESP decodes as AUTO.
@@ -1766,7 +1781,7 @@
         const next = autoLight();
         setWebsiteLight(next);
         log('[LIGHT] ' + (next === LIGHT.UNKNOWN ? 'UNKNOWN — no LDR data' : next),
-            next === LIGHT.ON ? 'green' : 'grey');
+          next === LIGHT.ON ? 'green' : 'grey');
       } else {
         log('[TEST] MANUAL mode active — simulation cannot move the light', 'dim');
       }
@@ -1780,16 +1795,16 @@
     //  failure. A single /update carries all three fields.
     // ═══════════════════════════════════════════════════════════════════
     const writeQ = {
-      desired:     null,   // { f1, f2, f3 }  — f1 may be null (omitted)
-      timer:       null,
-      inFlight:    false,
+      desired: null,   // { f1, f2, f3 }  — f1 may be null (omitted)
+      timer: null,
+      inFlight: false,
       lastWriteAt: 0,
     };
 
     function queueWrite(f1, f2, f3) {
       writeQ.desired = { f1: f1, f2: f2, f3: f3 };   // latest command wins
       log('[TS] queued  F1=' + (f1 === null ? 'keep' : f1) +
-          ' F2=' + f2 + ' F3=' + f3, 'dim');
+        ' F2=' + f2 + ' F3=' + f3, 'dim');
       renderControls();
       scheduleWrite();
     }
@@ -1839,7 +1854,7 @@
         writeQ.desired = null;
         log('[TS] No write key — command not sent', 'red');
         log('[TS] Set ts_write_key in localStorage, or deploy with ' +
-            'TS_WRITE_API_KEY set', 'dim');
+          'TS_WRITE_API_KEY set', 'dim');
         log('[UI] Website light unchanged', 'dim');
         renderControls();
         return;
@@ -1848,7 +1863,7 @@
       writeQ.inFlight = true;
 
       try {
-        const res  = await fetch(writeUrl(d.f1, d.f2, d.f3), { cache: 'no-store' });
+        const res = await fetch(writeUrl(d.f1, d.f2, d.f3), { cache: 'no-store' });
         const text = (await res.text()).trim();
 
         writeQ.lastWriteAt = Date.now();
@@ -1916,7 +1931,7 @@
       if (CONFIG.MODE === 'proxy') return API_BASE + '/feed';
 
       let url = TS_API + '/channels/' + encodeURIComponent(CONFIG.CHANNEL_ID) +
-                '/feeds/last.json';
+        '/feeds/last.json';
       if (CONFIG.READ_API_KEY) {
         url += '?api_key=' + encodeURIComponent(CONFIG.READ_API_KEY);
       }
@@ -1954,8 +1969,8 @@
     }
 
     function handleFeed(feed) {
-      const id     = fieldOrNull(feed && feed.entry_id);
-      const isNew  = id !== null && id !== state.lastEntryId;
+      const id = fieldOrNull(feed && feed.entry_id);
+      const isNew = id !== null && id !== state.lastEntryId;
       if (id !== null) state.lastEntryId = id;
 
       // Preserve the previous valid value on null — null is NEVER OFF.
@@ -1997,7 +2012,7 @@
       }
 
       log('[HW] entry ' + id + ': F1=' + state.f1 +
-          ' F2=' + state.f2 + ' F3=' + state.f3, 'dim');
+        ' F2=' + state.f2 + ' F3=' + state.f3, 'dim');
 
       // Real LDR from field1.
       if (state.f1 !== null) {
@@ -2009,7 +2024,7 @@
 
       if (prevHw !== state.hardwareLightState) {
         log('[HW] hardware light → ' + state.hardwareLightState,
-            state.hardwareLightState === LIGHT.ON ? 'green' : 'grey');
+          state.hardwareLightState === LIGHT.ON ? 'green' : 'grey');
       }
 
       // ── Does this move the website light? ──────────────────────────
@@ -2018,7 +2033,7 @@
       // and the ThingSpeak panel change.
       if (state.controlMode === MODE.MANUAL) {
         if (state.hardwareLightState !== state.websiteLightState &&
-            state.hardwareLightState !== LIGHT.UNKNOWN) {
+          state.hardwareLightState !== LIGHT.UNKNOWN) {
           log('[HW] hardware not synchronised yet — website keeps MANUAL state', 'dim');
         }
         renderHardwareReadout();
@@ -2108,10 +2123,10 @@
       // ── 1. URL query — an explicit, one-off override ────────────────
       const qCh = clean(q.get('channel'));
       if (qCh) {
-        CONFIG.MODE          = 'direct';
-        CONFIG.SOURCE        = 'URL query';
-        CONFIG.CHANNEL_ID    = qCh;
-        CONFIG.READ_API_KEY  = clean(q.get('read_key'));
+        CONFIG.MODE = 'direct';
+        CONFIG.SOURCE = 'URL query';
+        CONFIG.CHANNEL_ID = qCh;
+        CONFIG.READ_API_KEY = clean(q.get('read_key'));
         CONFIG.WRITE_API_KEY = clean(q.get('write_key'));
         return;
       }
@@ -2119,10 +2134,10 @@
       // ── 2. localStorage — saved per browser ─────────────────────────
       const lsCh = clean(lsGet('ts_channel'));
       if (lsCh) {
-        CONFIG.MODE          = 'direct';
-        CONFIG.SOURCE        = 'localStorage';
-        CONFIG.CHANNEL_ID    = lsCh;
-        CONFIG.READ_API_KEY  = clean(lsGet('ts_read_key'));
+        CONFIG.MODE = 'direct';
+        CONFIG.SOURCE = 'localStorage';
+        CONFIG.CHANNEL_ID = lsCh;
+        CONFIG.READ_API_KEY = clean(lsGet('ts_read_key'));
         CONFIG.WRITE_API_KEY = clean(lsGet('ts_write_key'));
         return;
       }
@@ -2130,46 +2145,46 @@
       // ── 3. Server-held keys — the Vercel path ───────────────────────
       const proxy = await probeProxy();
       if (proxy) {
-        CONFIG.MODE           = 'proxy';
-        CONFIG.SOURCE         = 'server (/api/config)';
-        CONFIG.CHANNEL_ID     = clean(proxy.channelId);
+        CONFIG.MODE = 'proxy';
+        CONFIG.SOURCE = 'server (/api/config)';
+        CONFIG.CHANNEL_ID = clean(proxy.channelId);
         CONFIG.REQUIRES_TOKEN = Boolean(proxy.requiresToken);
-        CONFIG.TOKEN          = clean(q.get('token')) ||
-                                clean(lsGet('ts_dashboard_token'));
+        CONFIG.TOKEN = clean(q.get('token')) ||
+          clean(lsGet('ts_dashboard_token'));
         return;
       }
 
       // ── 4. Nothing ──────────────────────────────────────────────────
-      CONFIG.MODE   = 'unconfigured';
+      CONFIG.MODE = 'unconfigured';
       CONFIG.SOURCE = 'none';
     }
 
     function logConfig() {
       if (CONFIG.MODE === 'proxy') {
         log('[CFG] Proxy mode — keys held server-side, ' +
-            'never sent to this browser', 'green');
+          'never sent to this browser', 'green');
         log('[CFG] Channel ' + (CONFIG.CHANNEL_ID || 'hidden') +
-            ' via /api/feed and /api/update', 'dim');
+          ' via /api/feed and /api/update', 'dim');
         if (CONFIG.REQUIRES_TOKEN && !CONFIG.TOKEN) {
           log('[CFG] This deployment requires a control token — reads work, ' +
-              'but AUTO/ON/OFF will be refused', 'amber');
+            'but AUTO/ON/OFF will be refused', 'amber');
           log('[CFG] Fix: localStorage.setItem("ts_dashboard_token", "…") ' +
-              'then reload', 'dim');
+            'then reload', 'dim');
         }
         return;
       }
 
       if (CONFIG.MODE === 'direct') {
         log('[CFG] Direct mode — calling api.thingspeak.com from the ' +
-            'browser', 'amber');
+          'browser', 'amber');
         log('[CFG] Channel ' + CONFIG.CHANNEL_ID + ', keys from ' +
-            CONFIG.SOURCE, 'dim');
+          CONFIG.SOURCE, 'dim');
         if (!CONFIG.READ_API_KEY) {
           log('[CFG] No read key — assuming a public channel', 'dim');
         }
         if (!CONFIG.WRITE_API_KEY) {
           log('[CFG] No write key — read-only, AUTO/ON/OFF cannot be sent',
-              'amber');
+            'amber');
         }
         return;
       }
@@ -2185,19 +2200,19 @@
       log('       localStorage.setItem("ts_write_key", "YOURWRITEKEY");', 'dim');
       log('       location.reload();', 'dim');
       log('  …or append ?channel=1234567&read_key=…&write_key=… to the URL.',
-          'dim');
+        'dim');
     }
 
     // ═══════════════════════════════════════════════════════════════════
     //  EVENT WIRING
     // ═══════════════════════════════════════════════════════════════════
     dom.btnAuto.addEventListener('click', clickAuto);
-    dom.btnOn.addEventListener('click',  () => clickManual(true));
+    dom.btnOn.addEventListener('click', () => clickManual(true));
     dom.btnOff.addEventListener('click', () => clickManual(false));
 
-    dom.btnSimDark.addEventListener('click',   () => clickSimulate(LDR.DARK));
+    dom.btnSimDark.addEventListener('click', () => clickSimulate(LDR.DARK));
     dom.btnSimBright.addEventListener('click', () => clickSimulate(LDR.BRIGHT));
-    dom.btnSimClear.addEventListener('click',  () => clickSimulate(null));
+    dom.btnSimClear.addEventListener('click', () => clickSimulate(null));
 
     dom.fetchBtn.addEventListener('click', manualFetch);
     dom.btnClearLog.addEventListener('click', clearLog);
