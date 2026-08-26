@@ -1,0 +1,20 @@
+# ── Credentials — never commit ─────────────────────────────────────────
+secrets.h
+*.local.h
+*.local.txt
+.env
+
+# ── Arduino / PlatformIO build output ──────────────────────────────────
+build/
+.pio/
+*.hex
+*.elf
+*.bin
+*.map
+
+# ── Editor / OS noise ──────────────────────────────────────────────────
+.vscode/
+.claude/
+Thumbs.db
+desktop.ini
+.DS_Store

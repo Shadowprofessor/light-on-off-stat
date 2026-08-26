@@ -1,0 +1,2038 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart Automatic Light Control — ESP8266 Dashboard</title>
+
+  <!--
+    ════════════════════════════════════════════════════════════════════
+     IoT Smart Automatic Light Control — WEB DASHBOARD
+    ════════════════════════════════════════════════════════════════════
+
+     THINGSPEAK CHANNEL — EXACTLY THREE FIELDS, MEANINGS NEVER CHANGE
+       field1 = LDR      1 = DARK,  0 = BRIGHT
+       field2 = Relay    1 = ON,    0 = OFF
+       field3 = LED      1 = ON,    0 = OFF
+
+     There is NO fourth field. None is created, read or written anywhere
+     in this file. There is therefore no ThingSpeak field for AUTO/MANUAL:
+     the control mode is held in RAM here, in the ESP8266 and in the
+     Arduino. See "HOW AUTO IS COMMUNICATED" in the script below.
+
+     DESIGN RULE — the website never depends on the hardware.
+       A click paints the UI FIRST and synchronises afterwards. If the
+       ESP8266, the Arduino or ThingSpeak is unreachable the website keeps
+       working and keeps its light state. Losing hardware NEVER switches
+       the website light off.
+    ════════════════════════════════════════════════════════════════════
+  -->
+
+  <style>
+    /* ═══════════════════════════════════════════════
+   CSS CUSTOM PROPERTIES
+═══════════════════════════════════════════════ */
+    :root {
+      /* Room states */
+      --room-dark: #0d1b2a;
+      --room-bright: #fff8e7;
+      --room-wall-dark: #1a2a3a;
+      --room-wall-bright: #fef3c7;
+      --room-floor-dark: #0a1520;
+      --room-floor-bright: #fde68a;
+
+      /* Bulb */
+      --bulb-off-glass: #6b7280;
+      --bulb-on-glass: #fbbf24;
+      --bulb-off-filament: #4b5563;
+      --bulb-on-filament: #fef3c7;
+      --bulb-cord: #374151;
+
+      /* Status cards */
+      --card-bg: rgba(255, 255, 255, 0.05);
+      --card-border: rgba(255, 255, 255, 0.10);
+      --dot-green: #22c55e;
+      --dot-grey: #4b5563;
+      --dot-purple: #a855f7;
+      --dot-amber: #f59e0b;
+
+      /* Log panel */
+      --log-bg: #0a0e1a;
+      --log-border: #1e293b;
+      --log-grey: #64748b;
+      --log-purple: #c084fc;
+      --log-amber: #fbbf24;
+      --log-green: #4ade80;
+
+      /* Connection badge */
+      --badge-connected: #22c55e;
+      --badge-disconnected: #ef4444;
+
+      /* Typography */
+      --font-mono: 'Courier New', Courier, monospace;
+      --font-sans: 'Segoe UI', system-ui, sans-serif;
+
+      /* Transitions */
+      --t-room: 1s ease;
+      --t-dot: 0.5s ease;
+      --t-fast: 0.3s ease;
+    }
+
+    /* ═══════════════════════════════════════════════
+   RESET & BASE
+═══════════════════════════════════════════════ */
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      font-size: 16px;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: #060d1a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ═══════════════════════════════════════════════
+   LAYOUT WRAPPER
+═══════════════════════════════════════════════ */
+    .dashboard {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 1.25rem 1rem 3rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    /* ═══════════════════════════════════════════════
+   HEADER
+═══════════════════════════════════════════════ */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      padding: 1rem 1.25rem;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 1rem;
+      backdrop-filter: blur(10px);
+    }
+
+    .header-left h1 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #f1f5f9;
+      letter-spacing: 0.02em;
+    }
+
+    .header-left p {
+      font-size: 0.75rem;
+      color: #64748b;
+      margin-top: 0.15rem;
+      font-family: var(--font-mono);
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    /* Connection badges */
+    .conn-badge {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.4rem 0.85rem;
+      border-radius: 2rem;
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      font-size: 0.72rem;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      letter-spacing: 0.05em;
+      transition: all var(--t-fast);
+      background: rgba(0, 0, 0, 0.3);
+      white-space: nowrap;
+    }
+
+    .conn-badge.connected {
+      border-color: var(--badge-connected);
+      color: var(--badge-connected);
+    }
+
+    .conn-badge.disconnected {
+      border-color: var(--badge-disconnected);
+      color: var(--badge-disconnected);
+    }
+
+    .conn-badge.pending {
+      border-color: #f59e0b;
+      color: #f59e0b;
+    }
+
+    .conn-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      animation: none;
+      flex-shrink: 0;
+    }
+
+    .conn-badge.connected .conn-dot {
+      animation: connPulse 1.5s infinite;
+    }
+
+    @keyframes connPulse {
+
+      0%,
+      100% {
+        opacity: 1;
+        transform: scale(1);
+      }
+
+      50% {
+        opacity: 0.4;
+        transform: scale(0.75);
+      }
+    }
+
+    /* ThingSpeak info pill */
+    .ts-pill {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.4rem 0.85rem;
+      border-radius: 2rem;
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      font-size: 0.72rem;
+      color: #94a3b8;
+      font-family: var(--font-mono);
+      background: rgba(0, 0, 0, 0.25);
+    }
+
+    .ts-pill span {
+      color: #a855f7;
+      font-weight: 700;
+    }
+
+    /* Last update */
+    .last-update {
+      font-size: 0.68rem;
+      color: #475569;
+      font-family: var(--font-mono);
+      white-space: nowrap;
+    }
+
+    /* ═══════════════════════════════════════════════
+   ROOM SCENE
+═══════════════════════════════════════════════ */
+    .room-scene {
+      position: relative;
+      width: 100%;
+      height: clamp(260px, 38vw, 380px);
+      border-radius: 1.25rem;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      transition: background var(--t-room);
+      background: var(--room-dark);
+    }
+
+    .room-scene.bright {
+      background: var(--room-bright);
+    }
+
+    /* Walls */
+    .room-wall {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg,
+          var(--room-wall-dark) 0%,
+          var(--room-dark) 70%,
+          var(--room-floor-dark) 100%);
+      transition: background var(--t-room);
+    }
+
+    .room-scene.bright .room-wall {
+      background: linear-gradient(180deg,
+          var(--room-wall-bright) 0%,
+          var(--room-bright) 65%,
+          var(--room-floor-bright) 100%);
+    }
+
+    /* Ceiling line */
+    .room-ceiling {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.04);
+      transition: background var(--t-room);
+    }
+
+    .room-scene.bright .room-ceiling {
+      background: rgba(0, 0, 0, 0.06);
+    }
+
+    /* Floor line */
+    .room-floor-line {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    /* ─── LIGHT BULB ─────────────────────────────── */
+    .bulb-wrap {
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      z-index: 2;
+    }
+
+    /* Cord */
+    .bulb-cord {
+      width: 3px;
+      height: 52px;
+      background: linear-gradient(180deg, rgba(55, 65, 81, 0.8), var(--bulb-cord));
+      border-radius: 2px;
+    }
+
+    /* SVG bulb container */
+    .bulb-svg-wrap {
+      position: relative;
+      width: 90px;
+      height: 110px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .bulb-svg {
+      width: 100%;
+      height: 100%;
+      transition: all 1s ease;
+      filter: drop-shadow(0 0 0px transparent);
+    }
+
+    /* Glow when ON */
+    .room-scene.light-on .bulb-svg {
+      filter: drop-shadow(0 0 18px rgba(251, 191, 36, 0.85)) drop-shadow(0 0 40px rgba(251, 191, 36, 0.4));
+      animation: bulbPulse 2s ease-in-out infinite;
+    }
+
+    @keyframes bulbPulse {
+
+      0%,
+      100% {
+        filter: drop-shadow(0 0 16px rgba(251, 191, 36, 0.8)) drop-shadow(0 0 36px rgba(251, 191, 36, 0.35));
+      }
+
+      50% {
+        filter: drop-shadow(0 0 28px rgba(251, 191, 36, 1)) drop-shadow(0 0 60px rgba(251, 191, 36, 0.55));
+      }
+    }
+
+    /* Radial glow overlay */
+    .bulb-glow-overlay {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 160px;
+      height: 160px;
+      border-radius: 50%;
+      background: radial-gradient(circle,
+          rgba(251, 191, 36, 0.18) 0%,
+          transparent 70%);
+      opacity: 0;
+      transition: opacity 1s ease;
+      pointer-events: none;
+    }
+
+    .room-scene.light-on .bulb-glow-overlay {
+      opacity: 1;
+      animation: glowRadial 2s ease-in-out infinite;
+    }
+
+    @keyframes glowRadial {
+
+      0%,
+      100% {
+        transform: translate(-50%, -50%) scale(1);
+        opacity: 0.7;
+      }
+
+      50% {
+        transform: translate(-50%, -50%) scale(1.25);
+        opacity: 1;
+      }
+    }
+
+    /* Floor reflection */
+    .floor-reflection {
+      position: absolute;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 200px;
+      height: 38px;
+      border-radius: 50%;
+      background: radial-gradient(ellipse at center,
+          rgba(251, 191, 36, 0.25) 0%,
+          transparent 70%);
+      opacity: 0;
+      transition: opacity 1s ease;
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    .room-scene.light-on .floor-reflection {
+      opacity: 1;
+    }
+
+    /* Room label */
+    .room-label {
+      position: absolute;
+      bottom: 1rem;
+      right: 1rem;
+      font-size: 0.72rem;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      color: rgba(255, 255, 255, 0.22);
+      letter-spacing: 0.08em;
+      transition: color var(--t-room);
+    }
+
+    .room-scene.light-on .room-label {
+      color: rgba(0, 0, 0, 0.35);
+    }
+
+    /* Standalone notice, shown when there is no hardware */
+    .room-notice {
+      position: absolute;
+      bottom: 1rem;
+      left: 1rem;
+      font-size: 0.62rem;
+      font-family: var(--font-mono);
+      letter-spacing: 0.06em;
+      padding: 0.25rem 0.6rem;
+      border-radius: 0.35rem;
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      color: #f87171;
+      transition: opacity var(--t-fast);
+    }
+
+    .room-notice.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    /* ═══════════════════════════════════════════════
+   STATUS CARDS
+═══════════════════════════════════════════════ */
+    .cards-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+    }
+
+    .status-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 1rem;
+      padding: 1.1rem 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+      transition: border-color 0.5s ease, background 0.5s ease;
+      backdrop-filter: blur(8px);
+    }
+
+    .status-card.active {
+      border-color: rgba(34, 197, 94, 0.35);
+      background: rgba(34, 197, 94, 0.05);
+    }
+
+    .status-card.ldr-dark {
+      border-color: rgba(168, 85, 247, 0.35);
+      background: rgba(168, 85, 247, 0.05);
+    }
+
+    .status-card.ldr-bright {
+      border-color: rgba(245, 158, 11, 0.35);
+      background: rgba(245, 158, 11, 0.05);
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .card-title {
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      color: #64748b;
+      text-transform: uppercase;
+      font-family: var(--font-mono);
+    }
+
+    .status-dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: var(--dot-grey);
+      transition: background var(--t-dot), box-shadow var(--t-dot);
+      flex-shrink: 0;
+    }
+
+    .status-dot.green {
+      background: var(--dot-green);
+      box-shadow: 0 0 8px var(--dot-green), 0 0 16px rgba(34, 197, 94, 0.4);
+    }
+
+    .status-dot.purple {
+      background: var(--dot-purple);
+      box-shadow: 0 0 8px var(--dot-purple), 0 0 16px rgba(168, 85, 247, 0.4);
+    }
+
+    .status-dot.amber {
+      background: var(--dot-amber);
+      box-shadow: 0 0 8px var(--dot-amber), 0 0 16px rgba(245, 158, 11, 0.4);
+    }
+
+    .card-value {
+      font-size: 1.3rem;
+      font-weight: 800;
+      font-family: var(--font-mono);
+      color: #f1f5f9;
+      letter-spacing: 0.02em;
+      transition: color var(--t-dot);
+    }
+
+    .card-value.on-val {
+      color: #4ade80;
+    }
+
+    .card-value.dark-val {
+      color: #c084fc;
+    }
+
+    .card-value.bright-val {
+      color: #fbbf24;
+    }
+
+    .card-pin {
+      font-size: 0.65rem;
+      color: #475569;
+      font-family: var(--font-mono);
+    }
+
+    .card-sub {
+      font-size: 0.62rem;
+      color: #334155;
+      font-family: var(--font-mono);
+    }
+
+    .card-sub b {
+      color: #64748b;
+      font-weight: 700;
+    }
+
+    /* ═══════════════════════════════════════════════
+   BOTTOM GRID (ThingSpeak + Simulation | Log)
+═══════════════════════════════════════════════ */
+    .bottom-grid {
+      display: grid;
+      grid-template-columns: 300px 1fr;
+      gap: 1rem;
+      align-items: start;
+    }
+
+    .side-col {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    /* ─── ThingSpeak / Simulation panels ────────── */
+    .ts-panel {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 1rem;
+      padding: 1.1rem 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .ts-panel-title {
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      color: #64748b;
+      text-transform: uppercase;
+      font-family: var(--font-mono);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .ts-panel-title::before {
+      content: '';
+      display: block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #a855f7;
+      flex-shrink: 0;
+    }
+
+    .ts-panel-title.test::before {
+      background: #f59e0b;
+    }
+
+    .ts-fields {
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+    }
+
+    .ts-field-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      padding: 0.55rem 0.75rem;
+      background: rgba(0, 0, 0, 0.25);
+      border-radius: 0.5rem;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .ts-field-label {
+      font-size: 0.7rem;
+      color: #64748b;
+      font-family: var(--font-mono);
+    }
+
+    .ts-field-label span {
+      color: #a855f7;
+      font-weight: 700;
+    }
+
+    .ts-field-value {
+      font-size: 0.75rem;
+      font-family: var(--font-mono);
+      font-weight: 700;
+      color: #e2e8f0;
+      min-width: 60px;
+      text-align: right;
+    }
+
+    .ts-fetch-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      padding: 0.55rem;
+      background: rgba(168, 85, 247, 0.15);
+      border: 1px solid rgba(168, 85, 247, 0.3);
+      border-radius: 0.6rem;
+      color: #c084fc;
+      font-size: 0.72rem;
+      font-family: var(--font-mono);
+      cursor: pointer;
+      transition: all var(--t-fast);
+      letter-spacing: 0.05em;
+    }
+
+    .ts-fetch-btn:hover {
+      background: rgba(168, 85, 247, 0.25);
+      border-color: rgba(168, 85, 247, 0.5);
+    }
+
+    .ts-fetch-btn:active {
+      transform: scale(0.97);
+    }
+
+    .ts-fetch-btn svg {
+      transition: transform 0.4s ease;
+    }
+
+    .ts-fetch-btn.spinning svg {
+      animation: spinIcon 0.6s linear infinite;
+    }
+
+    @keyframes spinIcon {
+      from {
+        transform: rotate(0deg);
+      }
+
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .ts-meta {
+      font-size: 0.62rem;
+      color: #334155;
+      font-family: var(--font-mono);
+      text-align: center;
+      line-height: 1.6;
+    }
+
+    .ts-meta a {
+      color: #a855f7;
+      text-decoration: none;
+    }
+
+    .ts-meta a:hover {
+      text-decoration: underline;
+    }
+
+    /* ─── Simulation buttons ────────────────────── */
+    .sim-btns {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .sim-btn {
+      padding: 0.5rem 0.65rem;
+      border-radius: 0.5rem;
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      background: rgba(255, 255, 255, 0.04);
+      color: #94a3b8;
+      font-size: 0.68rem;
+      font-family: var(--font-mono);
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-align: left;
+    }
+
+    .sim-btn:hover {
+      background: rgba(255, 255, 255, 0.09);
+      color: #e2e8f0;
+    }
+
+    .sim-btn:active {
+      transform: scale(0.98);
+    }
+
+    .sim-btn.active-dark {
+      background: rgba(168, 85, 247, 0.14);
+      border-color: rgba(168, 85, 247, 0.55);
+      color: #c084fc;
+    }
+
+    .sim-btn.active-bright {
+      background: rgba(245, 158, 11, 0.14);
+      border-color: rgba(245, 158, 11, 0.55);
+      color: #fbbf24;
+    }
+
+    /* ─── Serial Log ────────────────────────────── */
+    .log-panel {
+      background: var(--log-bg);
+      border: 1px solid var(--log-border);
+      border-radius: 1rem;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .log-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.65rem 1rem;
+      background: rgba(255, 255, 255, 0.03);
+      border-bottom: 1px solid var(--log-border);
+    }
+
+    .log-title {
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      color: #64748b;
+      text-transform: uppercase;
+      font-family: var(--font-mono);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .log-blink {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #22c55e;
+      animation: logBlink 1s step-end infinite;
+    }
+
+    @keyframes logBlink {
+
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: 0;
+      }
+    }
+
+    .log-clear-btn {
+      padding: 0.25rem 0.65rem;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 0.4rem;
+      color: #475569;
+      font-size: 0.65rem;
+      font-family: var(--font-mono);
+      cursor: pointer;
+      transition: all var(--t-fast);
+    }
+
+    .log-clear-btn:hover {
+      background: rgba(239, 68, 68, 0.12);
+      border-color: rgba(239, 68, 68, 0.3);
+      color: #ef4444;
+    }
+
+    .log-body {
+      height: 420px;
+      overflow-y: auto;
+      padding: 0.75rem 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.1rem;
+      scroll-behavior: smooth;
+    }
+
+    .log-body::-webkit-scrollbar {
+      width: 5px;
+    }
+
+    .log-body::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .log-body::-webkit-scrollbar-thumb {
+      background: #1e293b;
+      border-radius: 3px;
+    }
+
+    .log-line {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: var(--log-grey);
+      animation: slideIn 0.3s ease both;
+      border-radius: 2px;
+      padding: 0 2px;
+    }
+
+    @keyframes slideIn {
+      from {
+        transform: translateX(-18px);
+        opacity: 0;
+      }
+
+      to {
+        transform: translateX(0);
+        opacity: 1;
+      }
+    }
+
+    .log-line.purple {
+      color: var(--log-purple);
+    }
+
+    .log-line.amber {
+      color: var(--log-amber);
+    }
+
+    .log-line.green {
+      color: var(--log-green);
+    }
+
+    .log-line.red {
+      color: #f87171;
+    }
+
+    .log-line.dim {
+      color: #334155;
+    }
+
+    /* ═══════════════════════════════════════════════
+   MANUAL CONTROL BUTTONS
+═══════════════════════════════════════════════ */
+    .ctrl-wrap {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      flex-wrap: wrap;
+    }
+
+    .ctrl-label {
+      font-size: 0.64rem;
+      color: #475569;
+      font-family: var(--font-mono);
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      margin-right: 0.15rem;
+    }
+
+    .ctrl-btn {
+      padding: 0.32rem 0.65rem;
+      border-radius: 0.45rem;
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      background: rgba(255, 255, 255, 0.04);
+      color: #64748b;
+      font-size: 0.66rem;
+      font-family: var(--font-mono);
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      letter-spacing: 0.05em;
+      user-select: none;
+    }
+
+    .ctrl-btn:hover {
+      background: rgba(255, 255, 255, 0.09);
+      color: #94a3b8;
+    }
+
+    .ctrl-btn:active {
+      transform: scale(0.95);
+    }
+
+    .ctrl-btn.active-auto {
+      background: rgba(34, 197, 94, 0.12);
+      border-color: rgba(34, 197, 94, 0.55);
+      color: #4ade80;
+    }
+
+    .ctrl-btn.active-on {
+      background: rgba(251, 191, 36, 0.12);
+      border-color: rgba(251, 191, 36, 0.55);
+      color: #fbbf24;
+    }
+
+    .ctrl-btn.active-off {
+      background: rgba(239, 68, 68, 0.12);
+      border-color: rgba(239, 68, 68, 0.55);
+      color: #f87171;
+    }
+
+    .ctrl-badge {
+      font-size: 0.62rem;
+      font-family: var(--font-mono);
+      color: #475569;
+      padding: 0.22rem 0.55rem;
+      border-radius: 0.35rem;
+      background: rgba(0, 0, 0, 0.30);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      white-space: nowrap;
+      transition: color 0.3s ease;
+    }
+
+    .ctrl-badge.badge-auto { color: #4ade80; }
+    .ctrl-badge.badge-on   { color: #fbbf24; }
+    .ctrl-badge.badge-off  { color: #f87171; }
+
+    /* Small pulse while a cloud sync is still queued/in flight */
+    .ctrl-badge.syncing {
+      animation: ctrlPulse 1.1s ease-in-out infinite;
+    }
+
+    @keyframes ctrlPulse {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0.4; }
+    }
+
+    /* ═══════════════════════════════════════════════
+   RESPONSIVE
+═══════════════════════════════════════════════ */
+    @media (max-width: 768px) {
+      .cards-row {
+        grid-template-columns: 1fr;
+      }
+
+      .bottom-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      .header-right {
+        width: 100%;
+        justify-content: flex-start;
+      }
+
+      .room-scene {
+        height: 230px;
+      }
+
+      .log-body {
+        height: 300px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .dashboard {
+        padding: 0.75rem 0.65rem 2rem;
+      }
+
+      .bulb-svg-wrap {
+        width: 70px;
+        height: 85px;
+      }
+
+      .bulb-cord {
+        height: 38px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="dashboard">
+
+    <!-- ═══ HEADER ═══════════════════════════════ -->
+    <header class="header">
+      <div class="header-left">
+        <h1>⚡ Smart Automatic Light Control</h1>
+        <p>Arduino + ESP8266 + ThingSpeak · F1=LDR F2=Relay F3=LED</p>
+      </div>
+      <div class="header-right">
+        <!-- ThingSpeak (cloud) connection -->
+        <div class="conn-badge pending" id="cloudBadge">
+          <span class="conn-dot"></span>
+          <span id="cloudLabel">THINGSPEAK …</span>
+        </div>
+
+        <!-- Hardware (ESP + Arduino) connection -->
+        <div class="conn-badge pending" id="hwBadge">
+          <span class="conn-dot"></span>
+          <span id="hwLabel">HARDWARE …</span>
+        </div>
+
+        <!-- ThingSpeak channel pill -->
+        <div class="ts-pill">
+          CH&nbsp;<span id="chIdDisplay">—</span>
+        </div>
+
+        <!-- Last update -->
+        <div class="last-update" id="lastUpdateLabel">Last read: —</div>
+
+        <!-- Manual control -->
+        <div class="ctrl-wrap">
+          <span class="ctrl-label">CTRL</span>
+          <button class="ctrl-btn active-auto" id="btnAuto">AUTO</button>
+          <button class="ctrl-btn"             id="btnOn">ON</button>
+          <button class="ctrl-btn"             id="btnOff">OFF</button>
+          <span class="ctrl-badge badge-auto" id="ctrlBadge">AUTO MODE</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- ═══ ROOM SCENE ════════════════════════════ -->
+    <section class="room-scene" id="roomScene">
+      <div class="room-wall"></div>
+      <div class="room-ceiling"></div>
+
+      <!-- Bulb -->
+      <div class="bulb-wrap">
+        <div class="bulb-cord"></div>
+        <div class="bulb-svg-wrap">
+          <!-- Glow overlay -->
+          <div class="bulb-glow-overlay"></div>
+
+          <!-- SVG Bulb -->
+          <svg class="bulb-svg" id="bulbSvg" viewBox="0 0 90 110" xmlns="http://www.w3.org/2000/svg">
+
+            <!-- Cap / base -->
+            <rect x="33" y="78" width="24" height="5" rx="2" fill="#4b5563" />
+            <rect x="35" y="83" width="20" height="5" rx="1.5" fill="#374151" />
+            <rect x="37" y="88" width="16" height="5" rx="1.5" fill="#374151" />
+            <rect x="39" y="93" width="12" height="4" rx="1" fill="#2d3748" />
+
+            <!-- Screw rings on cap -->
+            <line x1="33" y1="80" x2="57" y2="80" stroke="#374151" stroke-width="1" opacity="0.6" />
+            <line x1="35" y1="85" x2="55" y2="85" stroke="#374151" stroke-width="1" opacity="0.6" />
+
+            <!-- Glass bulb -->
+            <ellipse id="bulbGlass" cx="45" cy="52" rx="28" ry="30" fill="#6b7280" opacity="0.85"
+              style="transition:fill 1s ease,opacity 1s ease;" />
+
+            <!-- Inner glow circle (visible when ON) -->
+            <ellipse id="bulbInnerGlow" cx="45" cy="50" rx="20" ry="22" fill="transparent" opacity="0"
+              style="transition:fill 1s ease,opacity 1s ease;" />
+
+            <!-- Filament wires -->
+            <g id="filamentGroup" style="transition:all 1s ease;">
+              <line x1="38" y1="78" x2="38" y2="58" stroke="#4b5563" stroke-width="1.5" id="filWireL"
+                style="transition:stroke 1s ease;" />
+              <line x1="52" y1="78" x2="52" y2="58" stroke="#4b5563" stroke-width="1.5" id="filWireR"
+                style="transition:stroke 1s ease;" />
+              <polyline id="filament" points="38,58 41,52 44,58 47,52 50,58 52,52" fill="none" stroke="#4b5563"
+                stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                style="transition:stroke 1s ease, filter 1s ease;" />
+            </g>
+
+            <!-- Highlight sheen -->
+            <ellipse cx="38" cy="38" rx="7" ry="10" fill="white" opacity="0.06" transform="rotate(-20,38,38)" />
+          </svg>
+        </div>
+      </div>
+
+      <!-- Floor reflection -->
+      <div class="floor-reflection"></div>
+      <div class="room-floor-line"></div>
+
+      <!-- Standalone notice + main label -->
+      <div class="room-notice hidden" id="roomNotice">STANDALONE — NO HARDWARE</div>
+      <div class="room-label" id="roomLabel">AUTO — WAITING FOR DATA</div>
+    </section>
+
+    <!-- ═══ STATUS CARDS ══════════════════════════ -->
+    <section class="cards-row">
+
+      <!-- Card 1: Relay -->
+      <div class="status-card" id="cardRelay">
+        <div class="card-header">
+          <span class="card-title">Relay</span>
+          <span class="status-dot" id="dotRelay"></span>
+        </div>
+        <div class="card-value" id="valRelay">—</div>
+        <div class="card-pin">D7 · Active-LOW · F2</div>
+        <div class="card-sub">hardware: <b id="hwRelayVal">—</b></div>
+      </div>
+
+      <!-- Card 2: LED -->
+      <div class="status-card" id="cardLed">
+        <div class="card-header">
+          <span class="card-title">LED</span>
+          <span class="status-dot" id="dotLed"></span>
+        </div>
+        <div class="card-value" id="valLed">—</div>
+        <div class="card-pin">D13 · Active-HIGH · F3</div>
+        <div class="card-sub">hardware: <b id="hwLedVal">—</b></div>
+      </div>
+
+      <!-- Card 3: LDR -->
+      <div class="status-card" id="cardLdr">
+        <div class="card-header">
+          <span class="card-title">LDR Signal</span>
+          <span class="status-dot" id="dotLdr"></span>
+        </div>
+        <div class="card-value" id="valLdr">—</div>
+        <div class="card-pin">A0 · dark ≥ 550 · F1</div>
+        <div class="card-sub">source: <b id="ldrSource">—</b></div>
+      </div>
+
+    </section>
+
+    <!-- ═══ BOTTOM GRID ═══════════════════════════ -->
+    <div class="bottom-grid">
+
+      <div class="side-col">
+
+        <!-- ThingSpeak Panel — exactly the three real fields -->
+        <aside class="ts-panel">
+          <div class="ts-panel-title">ThingSpeak Feed</div>
+
+          <div class="ts-fields">
+
+            <div class="ts-field-row">
+              <div class="ts-field-label"><span>F1</span> · LDR</div>
+              <div class="ts-field-value" id="tsF1">—</div>
+            </div>
+
+            <div class="ts-field-row">
+              <div class="ts-field-label"><span>F2</span> · Relay</div>
+              <div class="ts-field-value" id="tsF2">—</div>
+            </div>
+
+            <div class="ts-field-row">
+              <div class="ts-field-label"><span>F3</span> · LED</div>
+              <div class="ts-field-value" id="tsF3">—</div>
+            </div>
+
+            <div class="ts-field-row">
+              <div class="ts-field-label">Entry ID</div>
+              <div class="ts-field-value" id="tsEntryId">—</div>
+            </div>
+
+            <div class="ts-field-row">
+              <div class="ts-field-label">Created At</div>
+              <div class="ts-field-value" id="tsCreatedAt" style="font-size:0.62rem;">—</div>
+            </div>
+
+          </div>
+
+          <button class="ts-fetch-btn" id="fetchBtn">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+              stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="23 4 23 10 17 10" />
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+            </svg>
+            REFRESH NOW
+          </button>
+
+          <div class="ts-meta">
+            Auto-read every <strong>16s</strong><br />
+            Writes throttled to <strong>16s</strong> (free tier limit 15s)<br />
+            <a href="#" id="tsChannelLink" target="_blank" rel="noopener">View channel →</a>
+          </div>
+        </aside>
+
+        <!-- Test / Simulation panel — LOCAL ONLY, never written to the cloud -->
+        <aside class="ts-panel">
+          <div class="ts-panel-title test">Test / Simulation</div>
+
+          <div class="sim-btns">
+            <button class="sim-btn" id="btnSimDark">SIMULATE DARK</button>
+            <button class="sim-btn" id="btnSimBright">SIMULATE BRIGHT</button>
+            <button class="sim-btn" id="btnSimClear">CLEAR SIMULATION</button>
+          </div>
+
+          <div class="ts-meta">
+            Local only — never sent to ThingSpeak.<br />
+            Affects the light in <strong>AUTO</strong> mode only;<br />
+            MANUAL always overrides the LDR.
+          </div>
+        </aside>
+
+      </div>
+
+      <!-- Event Log -->
+      <div class="log-panel">
+        <div class="log-header">
+          <div class="log-title">
+            <div class="log-blink"></div>
+            Event Log
+          </div>
+          <button class="log-clear-btn" id="btnClearLog">CLEAR</button>
+        </div>
+        <div class="log-body" id="logBody"></div>
+      </div>
+
+    </div><!-- /bottom-grid -->
+  </div><!-- /dashboard -->
+
+  <script>
+    'use strict';
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  CONFIGURATION
+    //
+    //  The ThingSpeak channel and keys are deliberately NOT committed, so
+    //  this file is safe to publish. Supply them once from the browser
+    //  console (F12) and they persist in localStorage for that browser:
+    //
+    //      localStorage.setItem('ts_channel',   '1234567');
+    //      localStorage.setItem('ts_read_key',  'YOURREADKEY');
+    //      localStorage.setItem('ts_write_key', 'YOURWRITEKEY');
+    //      location.reload();
+    //
+    //  Anything stored there overrides the placeholders below. Note this is
+    //  convenience, not security: a browser-side key is visible to anyone
+    //  using this machine, which is unavoidable for a static page that
+    //  talks to ThingSpeak directly.
+    // ═══════════════════════════════════════════════════════════════════
+    const CONFIG = {
+      CHANNEL_ID:    localStorage.getItem('ts_channel')   || 'YOUR_CHANNEL_ID',
+      READ_API_KEY:  localStorage.getItem('ts_read_key')  || 'YOUR_READ_API_KEY',
+      WRITE_API_KEY: localStorage.getItem('ts_write_key') || 'YOUR_WRITE_API_KEY',
+
+      READ_INTERVAL_MS: 16000,    // feed poll (free tier minimum is 15 s)
+      MIN_WRITE_GAP_MS: 16000,    // client-side write throttle
+      HW_TIMEOUT_MS:   150000,    // no ESP entry for this long -> offline
+      CLICK_GRACE_MS:    3000,    // ignore cloud light changes right after a click
+      MAX_LOG_LINES:       120,
+    };
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  HOW AUTO IS COMMUNICATED WITHOUT A FOURTH FIELD
+    //
+    //  The channel has only F1=LDR, F2=Relay, F3=LED. Mode is NOT stored
+    //  in the cloud; it lives in RAM in the website, the ESP8266 and the
+    //  Arduino. The ESP works out what the user wants like this:
+    //
+    //    * PROVENANCE — the ESP remembers the entry ids of its own
+    //      /update calls. An entry it did not write came from this page.
+    //      This page only writes when a button is clicked, so a foreign
+    //      entry is a user command.
+    //
+    //    * AUTO-AGREEMENT — this page always writes
+    //          field1 = latest known LDR
+    //          field2/field3 = the requested relay/LED state
+    //      AUTO would have produced relay = field1 (dark -> ON). So:
+    //          field2 != field1  ->  contradicts the light level, which
+    //                                only a manual override can do
+    //                                => MANUAL ON (1) / MANUAL OFF (0)
+    //          field2 == field1  ->  agrees with what AUTO would do
+    //                                => AUTO, override released
+    //
+    //      The AUTO button therefore writes F1=F2=F3=latest LDR, which
+    //      always reads as AUTO on the ESP.
+    //
+    //  LIMITATION (unavoidable with three fields): MANUAL ON while the
+    //  room is already DARK writes 1,1,1 — identical to AUTO+DARK, and
+    //  MANUAL OFF while BRIGHT writes 0,0,0 — identical to AUTO+BRIGHT.
+    //  The hardware reads those as AUTO. The light is correct at that
+    //  instant either way; only a later LDR change diverges. This page
+    //  keeps its own MANUAL mode in RAM, so its display stays latched.
+    // ═══════════════════════════════════════════════════════════════════
+
+    const MODE  = { AUTO: 'AUTO', MANUAL: 'MANUAL' };
+    const LIGHT = { ON: 'ON', OFF: 'OFF', UNKNOWN: 'UNKNOWN' };
+    const LDR   = { DARK: 'DARK', BRIGHT: 'BRIGHT', UNKNOWN: 'UNKNOWN' };
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  STATE — website state and hardware state are deliberately separate
+    // ═══════════════════════════════════════════════════════════════════
+    const state = {
+      // What the website shows. This drives the room, bulb and cards.
+      controlMode:        MODE.AUTO,
+      websiteLightState:  LIGHT.UNKNOWN,
+
+      // What the hardware last reported. Display only — it never forces
+      // websiteLightState off.
+      hardwareLightState: LIGHT.UNKNOWN,
+      ldrState:           LDR.UNKNOWN,   // real LDR from ThingSpeak F1
+
+      // Local test override. Null = use the real LDR.
+      simulatedLdr:       null,
+
+      // Link health. `checked` stays false until the first read resolves so
+      // the badges can say "…" instead of falsely claiming OFFLINE.
+      hardwareConnected:  false,
+      cloudConnected:     false,
+      linkChecked:        false,
+
+      // Last VALID field values (null is never coerced to 0).
+      f1: null, f2: null, f3: null,
+
+      lastEntryId:      null,
+      lastHwEntryAt:    0,     // when an ESP-authored entry last arrived
+      lastUserActionAt: 0,
+      ownWriteIds:      [],    // entry ids WE wrote, newest last
+      readTimer:        null,
+    };
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  TINY EVENT BUS — every UI update is triggered by an event, and
+    //  events are only emitted when a value actually changes.
+    // ═══════════════════════════════════════════════════════════════════
+    const bus = {
+      map: {},
+      on(evt, fn) { (this.map[evt] || (this.map[evt] = [])).push(fn); },
+      emit(evt) { (this.map[evt] || []).forEach(fn => fn()); },
+    };
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  DOM
+    // ═══════════════════════════════════════════════════════════════════
+    const $ = id => document.getElementById(id);
+
+    const dom = {
+      room:        $('roomScene'),
+      roomLabel:   $('roomLabel'),
+      roomNotice:  $('roomNotice'),
+      bulbGlass:   $('bulbGlass'),
+      bulbInner:   $('bulbInnerGlow'),
+      filament:    $('filament'),
+      filWireL:    $('filWireL'),
+      filWireR:    $('filWireR'),
+
+      cloudBadge:  $('cloudBadge'),
+      cloudLabel:  $('cloudLabel'),
+      hwBadge:     $('hwBadge'),
+      hwLabel:     $('hwLabel'),
+      chIdDisplay: $('chIdDisplay'),
+      lastUpdate:  $('lastUpdateLabel'),
+
+      cardRelay: $('cardRelay'), dotRelay: $('dotRelay'), valRelay: $('valRelay'),
+      cardLed:   $('cardLed'),   dotLed:   $('dotLed'),   valLed:   $('valLed'),
+      cardLdr:   $('cardLdr'),   dotLdr:   $('dotLdr'),   valLdr:   $('valLdr'),
+      hwRelayVal: $('hwRelayVal'),
+      hwLedVal:   $('hwLedVal'),
+      ldrSource:  $('ldrSource'),
+
+      tsF1: $('tsF1'), tsF2: $('tsF2'), tsF3: $('tsF3'),
+      tsEntryId: $('tsEntryId'), tsCreatedAt: $('tsCreatedAt'),
+      fetchBtn: $('fetchBtn'), tsChannelLink: $('tsChannelLink'),
+
+      btnAuto: $('btnAuto'), btnOn: $('btnOn'), btnOff: $('btnOff'),
+      ctrlBadge: $('ctrlBadge'),
+
+      btnSimDark: $('btnSimDark'), btnSimBright: $('btnSimBright'),
+      btnSimClear: $('btnSimClear'),
+
+      logBody: $('logBody'), btnClearLog: $('btnClearLog'),
+    };
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  LOG
+    // ═══════════════════════════════════════════════════════════════════
+    let logLineCount = 0;
+
+    function timeNow() {
+      return new Date().toLocaleTimeString('en-GB', { hour12: false });
+    }
+
+    function log(text, cls = 'grey') {
+      const line = document.createElement('div');
+      line.className = 'log-line ' + cls;
+      line.textContent = '[' + timeNow() + ']  ' + text;
+      dom.logBody.appendChild(line);
+      logLineCount++;
+
+      while (logLineCount > CONFIG.MAX_LOG_LINES) {
+        dom.logBody.removeChild(dom.logBody.firstChild);
+        logLineCount--;
+      }
+      dom.logBody.scrollTop = dom.logBody.scrollHeight;
+    }
+
+    function rule() { log('─────────────────────────────', 'dim'); }
+
+    function clearLog() {
+      dom.logBody.innerHTML = '';
+      logLineCount = 0;
+      log('Log cleared.', 'dim');
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  DERIVED VALUES
+    // ═══════════════════════════════════════════════════════════════════
+
+    /** The LDR the website should act on: the simulation if set, else real. */
+    function effectiveLdr() {
+      return state.simulatedLdr !== null ? state.simulatedLdr : state.ldrState;
+    }
+
+    /** What AUTO implies for the effective LDR. */
+    function autoLight() {
+      const l = effectiveLdr();
+      if (l === LDR.DARK)   return LIGHT.ON;
+      if (l === LDR.BRIGHT) return LIGHT.OFF;
+      return LIGHT.UNKNOWN;
+    }
+
+    /**
+     * The latest known REAL LDR as a field1 bit, or null if the hardware
+     * has never reported one. The simulation is never written to the cloud.
+     */
+    function realLdrBit() {
+      if (state.ldrState === LDR.DARK)   return 1;
+      if (state.ldrState === LDR.BRIGHT) return 0;
+      return null;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  STATE MUTATORS — each emits only on a real change
+    // ═══════════════════════════════════════════════════════════════════
+
+    function setWebsiteLight(next) {
+      if (next === state.websiteLightState) return false;
+      state.websiteLightState = next;
+      bus.emit('light');
+      return true;
+    }
+
+    function setControlMode(next) {
+      if (next === state.controlMode) return false;
+      state.controlMode = next;
+      bus.emit('mode');
+      return true;
+    }
+
+    function setLdrState(next) {
+      if (next === state.ldrState) return false;
+      state.ldrState = next;
+      bus.emit('ldr');
+      return true;
+    }
+
+    function setCloudConnected(up) {
+      if (up === state.cloudConnected) return false;
+      state.cloudConnected = up;
+      log(up ? '[TS] THINGSPEAK CONNECTED' : '[TS] THINGSPEAK OFFLINE',
+          up ? 'green' : 'red');
+      if (!up) log('[UI] Website state preserved — nothing reset', 'dim');
+      bus.emit('cloud');
+      return true;
+    }
+
+    function setHardwareConnected(up) {
+      if (up === state.hardwareConnected) return false;
+      state.hardwareConnected = up;
+      if (up) {
+        log('[HW] HARDWARE CONNECTED', 'green');
+      } else {
+        log('[HW] Hardware disconnected', 'red');
+        log('[UI] Continuing in standalone mode', 'dim');
+      }
+      bus.emit('hardware');
+      return true;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  RENDERERS
+    // ═══════════════════════════════════════════════════════════════════
+
+    /**
+     * Room, bulb and the relay/LED cards render from websiteLightState.
+     * hardwareConnected is NEVER an input here — losing the hardware must
+     * not switch the on-screen light off.
+     */
+    function renderLight() {
+      const on = state.websiteLightState === LIGHT.ON;
+
+      dom.room.classList.toggle('light-on', on);
+      dom.room.classList.toggle('bright',   on);
+
+      if (on) {
+        dom.bulbGlass.setAttribute('fill', '#fbbf24');
+        dom.bulbGlass.setAttribute('opacity', '0.95');
+        dom.bulbInner.setAttribute('fill', 'rgba(255,236,153,0.6)');
+        dom.bulbInner.setAttribute('opacity', '1');
+        dom.filament.setAttribute('stroke', '#fef3c7');
+        dom.filWireL.setAttribute('stroke', '#d1a800');
+        dom.filWireR.setAttribute('stroke', '#d1a800');
+      } else {
+        dom.bulbGlass.setAttribute('fill', '#6b7280');
+        dom.bulbGlass.setAttribute('opacity', '0.85');
+        dom.bulbInner.setAttribute('fill', 'transparent');
+        dom.bulbInner.setAttribute('opacity', '0');
+        dom.filament.setAttribute('stroke', '#4b5563');
+        dom.filWireL.setAttribute('stroke', '#4b5563');
+        dom.filWireR.setAttribute('stroke', '#4b5563');
+      }
+
+      // Relay + LED cards mirror the website light immediately.
+      const known = state.websiteLightState !== LIGHT.UNKNOWN;
+
+      dom.cardRelay.className = 'status-card' + (on ? ' active' : '');
+      dom.dotRelay.className  = 'status-dot'  + (on ? ' green'  : '');
+      dom.valRelay.className  = 'card-value'  + (on ? ' on-val' : '');
+      dom.valRelay.textContent = known ? (on ? 'ON' : 'OFF') : '—';
+
+      dom.cardLed.className = 'status-card' + (on ? ' active' : '');
+      dom.dotLed.className  = 'status-dot'  + (on ? ' green'  : '');
+      dom.valLed.className  = 'card-value'  + (on ? ' on-val' : '');
+      dom.valLed.textContent = known ? (on ? 'ON' : 'OFF') : '—';
+
+      renderRoomLabel();
+    }
+
+    function renderRoomLabel() {
+      const auto = state.controlMode === MODE.AUTO;
+      let text;
+
+      if (state.websiteLightState === LIGHT.UNKNOWN) {
+        text = auto ? 'AUTO — WAITING FOR DATA' : 'MANUAL — WAITING';
+      } else {
+        const on = state.websiteLightState === LIGHT.ON;
+        text = (auto ? 'AUTO — LIGHT ' : 'MANUAL — LIGHT ') + (on ? 'ON' : 'OFF');
+      }
+      dom.roomLabel.textContent = text;
+    }
+
+    function renderLdr() {
+      const l   = effectiveLdr();
+      const sim = state.simulatedLdr !== null;
+
+      if (l === LDR.DARK) {
+        dom.cardLdr.className = 'status-card ldr-dark';
+        dom.dotLdr.className  = 'status-dot purple';
+        dom.valLdr.className  = 'card-value dark-val';
+        dom.valLdr.textContent = 'DARK (1)';
+      } else if (l === LDR.BRIGHT) {
+        dom.cardLdr.className = 'status-card ldr-bright';
+        dom.dotLdr.className  = 'status-dot amber';
+        dom.valLdr.className  = 'card-value bright-val';
+        dom.valLdr.textContent = 'BRIGHT (0)';
+      } else {
+        dom.cardLdr.className = 'status-card';
+        dom.dotLdr.className  = 'status-dot';
+        dom.valLdr.className  = 'card-value';
+        dom.valLdr.textContent = '—';
+      }
+
+      dom.ldrSource.textContent = sim ? 'SIMULATED'
+                                      : (state.ldrState === LDR.UNKNOWN ? 'no data'
+                                                                        : 'hardware');
+
+      dom.btnSimDark.className   = 'sim-btn' +
+        (state.simulatedLdr === LDR.DARK ? ' active-dark' : '');
+      dom.btnSimBright.className = 'sim-btn' +
+        (state.simulatedLdr === LDR.BRIGHT ? ' active-bright' : '');
+    }
+
+    function renderControls() {
+      [dom.btnAuto, dom.btnOn, dom.btnOff].forEach(b =>
+        b.classList.remove('active-auto', 'active-on', 'active-off'));
+      dom.ctrlBadge.classList.remove('badge-auto', 'badge-on', 'badge-off');
+
+      if (state.controlMode === MODE.AUTO) {
+        dom.btnAuto.classList.add('active-auto');
+        dom.ctrlBadge.classList.add('badge-auto');
+        dom.ctrlBadge.textContent = 'AUTO MODE';
+      } else if (state.websiteLightState === LIGHT.ON) {
+        dom.btnOn.classList.add('active-on');
+        dom.ctrlBadge.classList.add('badge-on');
+        dom.ctrlBadge.textContent = 'MANUAL ON';
+      } else {
+        dom.btnOff.classList.add('active-off');
+        dom.ctrlBadge.classList.add('badge-off');
+        dom.ctrlBadge.textContent = 'MANUAL OFF';
+      }
+
+      dom.ctrlBadge.classList.toggle('syncing', writeQ.desired !== null);
+      renderRoomLabel();
+    }
+
+    function renderBadges() {
+      if (!state.linkChecked) {
+        dom.cloudBadge.className = 'conn-badge pending';
+        dom.cloudLabel.textContent = 'THINGSPEAK …';
+        dom.hwBadge.className = 'conn-badge pending';
+        dom.hwLabel.textContent = 'HARDWARE …';
+        dom.roomNotice.classList.add('hidden');
+        return;
+      }
+
+      dom.cloudBadge.className = 'conn-badge ' +
+        (state.cloudConnected ? 'connected' : 'disconnected');
+      dom.cloudLabel.textContent = state.cloudConnected
+        ? 'THINGSPEAK CONNECTED' : 'THINGSPEAK OFFLINE';
+
+      dom.hwBadge.className = 'conn-badge ' +
+        (state.hardwareConnected ? 'connected' : 'disconnected');
+      dom.hwLabel.textContent = state.hardwareConnected
+        ? 'HARDWARE CONNECTED' : 'HARDWARE DISCONNECTED';
+
+      dom.roomNotice.classList.toggle('hidden', state.hardwareConnected);
+    }
+
+    function renderHardwareReadout() {
+      const fmt = v => (v === null ? '—' : (v === 1 ? 'ON (1)' : 'OFF (0)'));
+      dom.hwRelayVal.textContent = fmt(state.f2);
+      dom.hwLedVal.textContent   = fmt(state.f3);
+
+      dom.tsF1.textContent = state.f1 === null ? '—' : state.f1;
+      dom.tsF2.textContent = state.f2 === null ? '—' : state.f2;
+      dom.tsF3.textContent = state.f3 === null ? '—' : state.f3;
+    }
+
+    // Wire the renderers to the bus.
+    bus.on('light',    renderLight);
+    bus.on('light',    renderControls);
+    bus.on('mode',     renderControls);
+    bus.on('mode',     renderLight);
+    bus.on('ldr',      renderLdr);
+    bus.on('cloud',    renderBadges);
+    bus.on('hardware', renderBadges);
+    bus.on('feed',     renderHardwareReadout);
+
+    function renderAll() {
+      renderLight();
+      renderLdr();
+      renderControls();
+      renderBadges();
+      renderHardwareReadout();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  BUTTON HANDLERS — OPTIMISTIC. The UI is painted BEFORE any
+    //  network call, and nothing here awaits the network.
+    // ═══════════════════════════════════════════════════════════════════
+
+    function clickManual(on) {
+      state.lastUserActionAt = Date.now();
+
+      rule();
+      log('[CTRL] MANUAL ' + (on ? 'ON' : 'OFF') + ' requested', 'amber');
+
+      // 1. Website first — no waiting for ESP, Arduino, relay or cloud.
+      setControlMode(MODE.MANUAL);
+      setWebsiteLight(on ? LIGHT.ON : LIGHT.OFF);
+      renderAll();
+      log('[CTRL] Website light → ' + (on ? 'ON' : 'OFF'), 'green');
+
+      // 2. Then synchronise in the background.
+      const bit = on ? 1 : 0;
+      queueWrite(realLdrBit(), bit, bit);
+      log('[HW] Waiting for hardware synchronization', 'dim');
+    }
+
+    function clickAuto() {
+      state.lastUserActionAt = Date.now();
+
+      rule();
+      log('[CTRL] AUTO selected', 'amber');
+
+      // 1. Website first, using the latest known LDR.
+      setControlMode(MODE.AUTO);
+      const next = autoLight();
+      setWebsiteLight(next);
+      renderAll();
+
+      log('[LDR] ' + effectiveLdr() +
+          (state.simulatedLdr !== null ? '  (simulated)' : ''),
+          effectiveLdr() === LDR.DARK ? 'purple' : 'amber');
+      log('[LIGHT] ' + (next === LIGHT.UNKNOWN ? 'UNKNOWN — no LDR data yet' : next),
+          next === LIGHT.ON ? 'green' : 'grey');
+
+      // 2. Tell the hardware to resume AUTO. Writing F1=F2=F3=latest LDR
+      //    is exactly what AUTO produces, which the ESP decodes as AUTO.
+      const bit = realLdrBit();
+      if (bit === null) {
+        log('[HW] AUTO not sent — no LDR reading from hardware yet', 'dim');
+      } else {
+        queueWrite(bit, bit, bit);
+        log('[HW] Waiting for hardware synchronization', 'dim');
+      }
+    }
+
+    function clickSimulate(which) {
+      state.simulatedLdr = which;      // LDR.DARK | LDR.BRIGHT | null
+
+      rule();
+      if (which === null) {
+        log('[TEST] Simulation cleared', 'dim');
+      } else {
+        log('[TEST] Simulated ' + which, 'purple');
+      }
+
+      bus.emit('ldr');
+
+      // MANUAL always overrides the LDR — simulated or real.
+      if (state.controlMode === MODE.AUTO) {
+        const next = autoLight();
+        setWebsiteLight(next);
+        log('[LIGHT] ' + (next === LIGHT.UNKNOWN ? 'UNKNOWN — no LDR data' : next),
+            next === LIGHT.ON ? 'green' : 'grey');
+      } else {
+        log('[TEST] MANUAL mode active — simulation cannot move the light', 'dim');
+      }
+
+      renderAll();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  THINGSPEAK WRITE QUEUE
+    //  One slot, newest wins, throttled to MIN_WRITE_GAP_MS, retried on
+    //  failure. A single /update carries all three fields.
+    // ═══════════════════════════════════════════════════════════════════
+    const writeQ = {
+      desired:     null,   // { f1, f2, f3 }  — f1 may be null (omitted)
+      timer:       null,
+      inFlight:    false,
+      lastWriteAt: 0,
+    };
+
+    function queueWrite(f1, f2, f3) {
+      writeQ.desired = { f1: f1, f2: f2, f3: f3 };   // latest command wins
+      log('[TS] queued  F1=' + (f1 === null ? 'keep' : f1) +
+          ' F2=' + f2 + ' F3=' + f3, 'dim');
+      renderControls();
+      scheduleWrite();
+    }
+
+    function scheduleWrite() {
+      if (writeQ.timer !== null || writeQ.inFlight) return;
+
+      const wait = Math.max(0,
+        CONFIG.MIN_WRITE_GAP_MS - (Date.now() - writeQ.lastWriteAt));
+
+      if (wait > 0) {
+        log('[TS] Rate limit — sending in ' + Math.ceil(wait / 1000) + 's', 'dim');
+      }
+
+      writeQ.timer = setTimeout(() => {
+        writeQ.timer = null;
+        flushWrite();
+      }, wait);
+    }
+
+    async function flushWrite() {
+      if (writeQ.inFlight || writeQ.desired === null) return;
+
+      const d = writeQ.desired;
+      writeQ.inFlight = true;
+
+      let url = 'https://api.thingspeak.com/update?api_key=' + CONFIG.WRITE_API_KEY;
+      if (d.f1 !== null) url += '&field1=' + d.f1;   // omit -> preserve nothing to send
+      url += '&field2=' + d.f2 + '&field3=' + d.f3;
+
+      try {
+        const res  = await fetch(url, { cache: 'no-store' });
+        const text = (await res.text()).trim();
+        const id   = parseInt(text, 10);
+
+        writeQ.lastWriteAt = Date.now();
+
+        if (id > 0) {
+          rememberOwnWrite(id);
+          setCloudConnected(true);
+          // Only clear the slot if a newer click has not replaced it.
+          if (writeQ.desired === d) writeQ.desired = null;
+          log('[TS] F2=' + d.f2 + ' F3=' + d.f3 + ' written (entry ' + id + ')', 'green');
+        } else {
+          // ThingSpeak returns 0 when the 15 s channel window is not open.
+          log('[TS] Channel busy (15s limit) — retrying', 'amber');
+        }
+      } catch (err) {
+        setCloudConnected(false);
+        writeQ.lastWriteAt = Date.now();
+        log('[TS] Write failed: ' + err.message + ' — retrying', 'red');
+        log('[UI] Website light unchanged', 'dim');
+      } finally {
+        writeQ.inFlight = false;
+        renderControls();
+        if (writeQ.desired !== null) scheduleWrite();
+      }
+    }
+
+    function rememberOwnWrite(id) {
+      state.ownWriteIds.push(id);
+      if (state.ownWriteIds.length > 25) state.ownWriteIds.shift();
+    }
+
+    function isOwnWrite(id) {
+      return state.ownWriteIds.indexOf(id) !== -1;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  THINGSPEAK READ — field1/field2/field3 only
+    // ═══════════════════════════════════════════════════════════════════
+
+    function readUrl() {
+      return 'https://api.thingspeak.com/channels/' + CONFIG.CHANNEL_ID +
+             '/feeds/last.json?api_key=' + CONFIG.READ_API_KEY;
+    }
+
+    /** Parses a ThingSpeak field. Returns null for null/blank/invalid. */
+    function fieldOrNull(raw) {
+      if (raw === null || raw === undefined || raw === '') return null;
+      const n = parseInt(raw, 10);
+      return Number.isNaN(n) ? null : n;
+    }
+
+    async function readFeed() {
+      try {
+        const res = await fetch(readUrl(), { cache: 'no-store' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const feed = await res.json();
+
+        state.linkChecked = true;
+        setCloudConnected(true);
+        handleFeed(feed);
+        dom.lastUpdate.textContent = 'Last read: ' + timeNow();
+
+      } catch (err) {
+        // A cloud failure must NEVER reset the website light.
+        state.linkChecked = true;
+        setCloudConnected(false);
+        dom.lastUpdate.textContent = 'Last read: failed at ' + timeNow();
+        log('[TS] Read failed: ' + err.message, 'red');
+      }
+
+      evaluateHardwareLink();
+      renderBadges();
+    }
+
+    function handleFeed(feed) {
+      const id     = fieldOrNull(feed && feed.entry_id);
+      const isNew  = id !== null && id !== state.lastEntryId;
+      if (id !== null) state.lastEntryId = id;
+
+      // Preserve the previous valid value on null — null is NEVER OFF.
+      const f1 = fieldOrNull(feed && feed.field1);
+      const f2 = fieldOrNull(feed && feed.field2);
+      const f3 = fieldOrNull(feed && feed.field3);
+      if (f1 !== null) state.f1 = f1;
+      if (f2 !== null) state.f2 = f2;
+      if (f3 !== null) state.f3 = f3;
+
+      dom.tsEntryId.textContent = id === null ? '—' : id;
+      if (feed && feed.created_at) {
+        dom.tsCreatedAt.textContent = new Date(feed.created_at).toLocaleString([], {
+          month: 'short', day: 'numeric',
+          hour: '2-digit', minute: '2-digit', second: '2-digit'
+        });
+      }
+      bus.emit('feed');
+
+      if (!isNew) return;
+
+      // An entry this page did not write came from the ESP8266.
+      const fromHardware = id !== null && !isOwnWrite(id);
+      if (!fromHardware) {
+        log('[TS] Entry ' + id + ' is our own command echo', 'dim');
+        return;
+      }
+
+      state.lastHwEntryAt = Date.now();
+      setHardwareConnected(true);
+
+      // Hardware light state — display only.
+      const prevHw = state.hardwareLightState;
+      if (state.f2 === null) {
+        state.hardwareLightState = LIGHT.UNKNOWN;
+      } else {
+        state.hardwareLightState =
+          (state.f2 === 1 && state.f3 === 1) ? LIGHT.ON : LIGHT.OFF;
+      }
+
+      log('[HW] entry ' + id + ': F1=' + state.f1 +
+          ' F2=' + state.f2 + ' F3=' + state.f3, 'dim');
+
+      // Real LDR from field1.
+      if (state.f1 !== null) {
+        const nextLdr = state.f1 === 1 ? LDR.DARK : LDR.BRIGHT;
+        if (setLdrState(nextLdr)) {
+          log('[LDR] ' + nextLdr, nextLdr === LDR.DARK ? 'purple' : 'amber');
+        }
+      }
+
+      if (prevHw !== state.hardwareLightState) {
+        log('[HW] hardware light → ' + state.hardwareLightState,
+            state.hardwareLightState === LIGHT.ON ? 'green' : 'grey');
+      }
+
+      // ── Does this move the website light? ──────────────────────────
+      // MANUAL: no. The user's click is authoritative, so a hardware
+      // report can never overwrite it. Only the cards' "hardware:" lines
+      // and the ThingSpeak panel change.
+      if (state.controlMode === MODE.MANUAL) {
+        if (state.hardwareLightState !== state.websiteLightState &&
+            state.hardwareLightState !== LIGHT.UNKNOWN) {
+          log('[HW] hardware not synchronised yet — website keeps MANUAL state', 'dim');
+        }
+        renderHardwareReadout();
+        return;
+      }
+
+      // AUTO with a simulation active: the simulation wins.
+      if (state.simulatedLdr !== null) {
+        log('[TEST] Simulation active — real LDR not applied to the light', 'dim');
+        renderHardwareReadout();
+        return;
+      }
+
+      // AUTO: follow the LDR, but ignore a reply that raced a fresh click.
+      if (Date.now() - state.lastUserActionAt < CONFIG.CLICK_GRACE_MS) {
+        log('[HW] Ignoring reply that raced the last command', 'dim');
+        renderHardwareReadout();
+        return;
+      }
+
+      const next = autoLight();
+      if (setWebsiteLight(next)) {
+        log('[LIGHT] ' + next, next === LIGHT.ON ? 'green' : 'grey');
+      }
+      renderHardwareReadout();
+    }
+
+    /** Hardware is "connected" while ESP entries keep arriving. */
+    function evaluateHardwareLink() {
+      const alive = state.lastHwEntryAt > 0 &&
+        (Date.now() - state.lastHwEntryAt) < CONFIG.HW_TIMEOUT_MS;
+      setHardwareConnected(alive);
+    }
+
+    function manualFetch() {
+      dom.fetchBtn.classList.add('spinning');
+      readFeed().finally(() =>
+        setTimeout(() => dom.fetchBtn.classList.remove('spinning'), 600));
+    }
+
+    function startReadLoop() {
+      readFeed();
+      clearInterval(state.readTimer);
+      state.readTimer = setInterval(readFeed, CONFIG.READ_INTERVAL_MS);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  EVENT WIRING
+    // ═══════════════════════════════════════════════════════════════════
+    dom.btnAuto.addEventListener('click', clickAuto);
+    dom.btnOn.addEventListener('click',  () => clickManual(true));
+    dom.btnOff.addEventListener('click', () => clickManual(false));
+
+    dom.btnSimDark.addEventListener('click',   () => clickSimulate(LDR.DARK));
+    dom.btnSimBright.addEventListener('click', () => clickSimulate(LDR.BRIGHT));
+    dom.btnSimClear.addEventListener('click',  () => clickSimulate(null));
+
+    dom.fetchBtn.addEventListener('click', manualFetch);
+    dom.btnClearLog.addEventListener('click', clearLog);
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  INIT
+    //  Startup does NOT assume the light is OFF. It stays UNKNOWN and is
+    //  clearly labelled until the first valid ThingSpeak read.
+    // ═══════════════════════════════════════════════════════════════════
+    (function init() {
+      log('================================', 'dim');
+      log('  Smart Automatic Light Control', 'green');
+      log('  Arduino + ESP8266 + ThingSpeak', 'green');
+      log('================================', 'dim');
+      log('[UI] Fields: F1=LDR  F2=Relay  F3=LED', 'dim');
+      log('[UI] Mode   : AUTO (held locally, not in the cloud)', 'grey');
+      log('[UI] Light  : UNKNOWN until the first read', 'grey');
+      log('[TS] Reading every ' + (CONFIG.READ_INTERVAL_MS / 1000) + 's…', 'dim');
+      rule();
+
+      dom.chIdDisplay.textContent = CONFIG.CHANNEL_ID;
+      dom.tsChannelLink.href =
+        'https://thingspeak.com/channels/' + CONFIG.CHANNEL_ID;
+
+      renderAll();
+      startReadLoop();
+
+      // Re-evaluate the hardware link on its own clock so the badge goes
+      // stale even if the read loop is failing.
+      setInterval(evaluateHardwareLink, 5000);
+    })();
+  </script>
+</body>
+
+</html>
