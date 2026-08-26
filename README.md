@@ -19,10 +19,17 @@ overrides.
 |---|---|
 | `arduino_ldr/` | Uno sketch — reads the LDR, decides dark/bright, drives relay + LED |
 | `esp8266_thingspeak/` | ESP8266 bridge — Arduino ⇄ ThingSpeak |
-| `index.html` | Static dashboard — live state, AUTO / ON / OFF buttons |
+| `index.html` | The dashboard — live state, AUTO / ON / OFF buttons |
+| `api/` | Optional serverless proxy so the API keys stay off the browser |
+| `vercel.json` | Deployment config — cache and security headers |
+| `.env.example` | The environment variables `api/` reads |
 
 The Arduino, not the ESP, owns the automation. If WiFi drops, the light keeps
 working — the cloud layer is for monitoring and manual override only.
+
+The dashboard is still a single self-contained HTML file with no build step.
+`api/` is genuinely optional: delete the folder and everything still works,
+just with the keys in the browser instead of on a server.
 
 ## Wiring
 
@@ -102,14 +109,10 @@ reasoning and its one known ambiguity.
 
 ### 3. Dashboard
 
-Open `index.html` in a browser, then set your keys once from the console (F12):
-
-```js
-localStorage.setItem('ts_channel',   '1234567');
-localStorage.setItem('ts_read_key',  'YOURREADKEY');
-localStorage.setItem('ts_write_key', 'YOURWRITEKEY');
-location.reload();
-```
+The dashboard finds its ThingSpeak keys at boot and picks a mode to match, so
+there is nothing to edit in `index.html`. See **Running the dashboard** below.
+It logs which mode and key source it chose in the on-screen console, so you
+are never guessing.
 
 ### 4. Flash
 
@@ -125,17 +128,119 @@ Substitute your own ports. Boards using a **CP2102** USB-UART need the
 Silicon Labs VCP driver; **CH340** clones need the WCH driver. Neither ships
 with the Arduino IDE.
 
+## Running the dashboard
+
+Four ways, no code changes between them. The dashboard resolves its
+configuration at startup, highest precedence first:
+
+| # | Source | Mode |
+|---|---|---|
+| 1 | `?channel=…&read_key=…&write_key=…` in the URL | direct |
+| 2 | `localStorage` keys in that browser | direct |
+| 3 | `/api/config` reporting server-held keys | **proxy** |
+| 4 | nothing found | idle, with setup instructions on screen |
+
+**Proxy mode** keeps the keys in server environment variables. The browser
+receives the channel id and nothing else, and calls `/api/feed` and
+`/api/update` instead of `api.thingspeak.com`.
+
+**Direct mode** calls ThingSpeak straight from the browser, so the keys have
+to be in the browser. Convenient, not secret.
+
+Either way the bytes that reach the channel are identical, so the ESP8266 and
+the Arduino need no changes and cannot tell the difference.
+
+### On Vercel
+
+```sh
+npm run deploy          # or: git push, with the repo imported on vercel.com
+```
+
+Then set the environment variables in **Project → Settings → Environment
+Variables**:
+
+| Variable | Required | Notes |
+|---|---|---|
+| `TS_CHANNEL_ID` | yes | Enables proxy mode. Not secret — it is in the public channel URL |
+| `TS_READ_API_KEY` | private channels | Omit for a public channel |
+| `TS_WRITE_API_KEY` | to send commands | Without it the dashboard is read-only |
+| `DASHBOARD_TOKEN` | recommended | Shared secret required to switch the relay — see below |
+
+Redeploy after changing them; Vercel only injects env vars at build and
+invocation time. There is no build step and no dependency to install — the
+repo root is served as-is and `api/*.js` become serverless functions.
+
+### Locally, with the proxy
+
+```sh
+cp .env.example .env.local     # then fill in your real values
+npm run dev                    # vercel dev, on http://localhost:3000
+```
+
+### Locally, as a plain static site
+
+No server-side keys, no `api/`. Set the keys once per browser instead:
+
+```sh
+npm run static                 # http://localhost:3000
+```
+
+```js
+// then in the browser console (F12)
+localStorage.setItem('ts_channel',   '1234567');
+localStorage.setItem('ts_read_key',  'YOURREADKEY');
+localStorage.setItem('ts_write_key', 'YOURWRITEKEY');
+location.reload();
+```
+
+This is also the path for GitHub Pages, Netlify, an SD card, or any other
+dumb static host.
+
+### Straight off disk
+
+Double-click `index.html`. It detects `file://`, skips the `/api` probe
+entirely, and uses the `localStorage` keys above. Everything works except
+proxy mode, which needs a server by definition.
+
 ## Security note
 
-A static page cannot hide an API key — the write key reaches the browser and
-is therefore visible to whoever uses that machine. That is inherent to talking
-to ThingSpeak directly from client-side JavaScript, and the `localStorage`
-approach above only keeps the key out of *this repository*.
+Read this before you put the URL anywhere public. The two modes fail in
+*different* ways, and proxy mode is not simply the safe one.
 
-It matters here because the ESP treats channel writes as commands: **anyone
-holding the write key can switch the relay.** If a key is ever exposed,
-regenerate it on the channel's *API Keys* tab. Put a real backend in front of
-ThingSpeak if this ever controls anything that matters.
+**Direct mode leaks the key.** A static page cannot hide an API key — the
+write key reaches the browser and is visible to anyone using that machine.
+That is inherent to calling ThingSpeak from client-side JavaScript; the
+`localStorage` approach only keeps the key out of *this repository*. The ESP
+treats channel writes as commands, so **anyone holding the write key can
+switch the relay.** If a key is ever exposed, regenerate it on the channel's
+*API Keys* tab.
+
+**Proxy mode leaks the ability instead.** The key is safe on the server, but
+`/api/update` will switch the relay for anybody who can reach it — and with
+no key needed, the deployment URL *is* the credential. A public Vercel URL is
+guessable and gets crawled.
+
+So if you deploy publicly, set `DASHBOARD_TOKEN` to a long random string:
+
+```sh
+# any long random value
+openssl rand -hex 24
+```
+
+Then, once per browser:
+
+```js
+localStorage.setItem('ts_dashboard_token', 'the-same-value');
+location.reload();
+```
+
+`/api/update` then rejects commands without it (`403`), while `/api/feed`
+stays open — reading is harmless. The dashboard says so in its console when
+a token is required but missing. Vercel's own password protection or an
+allowlist of one is a fine alternative.
+
+Neither mode is real authentication. Put a proper backend with real accounts
+in front of ThingSpeak if this ever switches something that matters.
 
 ## Safety
 

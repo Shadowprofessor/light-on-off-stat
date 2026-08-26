@@ -1,0 +1,15 @@
+{
+  "name": "light-on-off-stat",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Dashboard for an LDR-driven mains light controller (Arduino Uno + ESP8266 + ThingSpeak)",
+  "scripts": {
+    "dev": "npx --yes vercel dev",
+    "static": "npx --yes serve . --listen 3000",
+    "deploy": "npx --yes vercel deploy --prod"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

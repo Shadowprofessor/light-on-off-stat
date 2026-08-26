@@ -3,6 +3,8 @@ secrets.h
 *.local.h
 *.local.txt
 .env
+.env.local
+.env.*.local
 
 # ── Arduino / PlatformIO build output ──────────────────────────────────
 build/
@@ -11,6 +13,12 @@ build/
 *.elf
 *.bin
 *.map
+
+# ── Web / Vercel ───────────────────────────────────────────────────────
+node_modules/
+.vercel
+.vercel_build_output/
+npm-debug.log*
 
 # ── Editor / OS noise ──────────────────────────────────────────────────
 .vscode/

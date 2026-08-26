@@ -1257,26 +1257,44 @@
     'use strict';
 
     // ═══════════════════════════════════════════════════════════════════
-    //  CONFIGURATION
+    //  CONFIGURATION — resolved at boot, highest precedence first
     //
-    //  The ThingSpeak channel and keys are deliberately NOT committed, so
-    //  this file is safe to publish. Supply them once from the browser
-    //  console (F12) and they persist in localStorage for that browser:
+    //    1. URL query    ?channel=…&read_key=…&write_key=…   (one-off)
+    //    2. localStorage ts_channel / ts_read_key / ts_write_key
+    //    3. /api/config  server-held keys                 -> PROXY MODE
+    //    4. nothing      the page says so and idles
+    //
+    //  PROXY MODE is what a Vercel deployment uses. The keys live in
+    //  environment variables on the server, the browser never receives
+    //  them, and this page calls /api/feed and /api/update instead of
+    //  api.thingspeak.com.
+    //
+    //  DIRECT MODE is what a plain static host — or this file opened
+    //  straight off disk — uses. It calls api.thingspeak.com from the
+    //  browser, so the keys have to BE in the browser. That is convenience,
+    //  not security: a key in localStorage is visible to anyone at that
+    //  machine. Set it once from the console (F12):
     //
     //      localStorage.setItem('ts_channel',   '1234567');
     //      localStorage.setItem('ts_read_key',  'YOURREADKEY');
     //      localStorage.setItem('ts_write_key', 'YOURWRITEKEY');
     //      location.reload();
     //
-    //  Anything stored there overrides the placeholders below. Note this is
-    //  convenience, not security: a browser-side key is visible to anyone
-    //  using this machine, which is unavoidable for a static page that
-    //  talks to ThingSpeak directly.
+    //  Either way the wire format is identical, so the ESP8266 and the
+    //  Arduino cannot tell the difference and need no changes.
     // ═══════════════════════════════════════════════════════════════════
+    const TS_API   = 'https://api.thingspeak.com';
+    const API_BASE = 'api';          // relative, so any mount path works
+
     const CONFIG = {
-      CHANNEL_ID:    localStorage.getItem('ts_channel')   || 'YOUR_CHANNEL_ID',
-      READ_API_KEY:  localStorage.getItem('ts_read_key')  || 'YOUR_READ_API_KEY',
-      WRITE_API_KEY: localStorage.getItem('ts_write_key') || 'YOUR_WRITE_API_KEY',
+      // Populated by resolveConfig() before the read loop starts.
+      MODE:           'unconfigured',   // 'proxy' | 'direct' | 'unconfigured'
+      SOURCE:         'none',           // where the values came from
+      CHANNEL_ID:     '',
+      READ_API_KEY:   '',               // optional: public channels need none
+      WRITE_API_KEY:  '',
+      TOKEN:          '',               // optional /api/update shared secret
+      REQUIRES_TOKEN: false,
 
       READ_INTERVAL_MS: 16000,    // feed poll (free tier minimum is 15 s)
       MIN_WRITE_GAP_MS: 16000,    // client-side write throttle
@@ -1792,22 +1810,67 @@
       }, wait);
     }
 
+    /**
+     * Builds the update URL for whichever mode is active. Field meanings and
+     * ordering are identical either way, so the ESP8266 sees the same thing.
+     */
+    function writeUrl(f1, f2, f3) {
+      const p = new URLSearchParams();
+      if (f1 !== null) p.set('field1', f1);   // omit -> leave field1 alone
+      p.set('field2', f2);
+      p.set('field3', f3);
+
+      if (CONFIG.MODE === 'proxy') {
+        if (CONFIG.TOKEN) p.set('token', CONFIG.TOKEN);
+        return API_BASE + '/update?' + p.toString();
+      }
+      p.set('api_key', CONFIG.WRITE_API_KEY);
+      return TS_API + '/update?' + p.toString();
+    }
+
     async function flushWrite() {
       if (writeQ.inFlight || writeQ.desired === null) return;
 
       const d = writeQ.desired;
+
+      // Direct mode needs the write key in the browser; proxy mode does not.
+      // Bail loudly instead of firing a request that cannot possibly work.
+      if (CONFIG.MODE !== 'proxy' && !CONFIG.WRITE_API_KEY) {
+        writeQ.desired = null;
+        log('[TS] No write key — command not sent', 'red');
+        log('[TS] Set ts_write_key in localStorage, or deploy with ' +
+            'TS_WRITE_API_KEY set', 'dim');
+        log('[UI] Website light unchanged', 'dim');
+        renderControls();
+        return;
+      }
+
       writeQ.inFlight = true;
 
-      let url = 'https://api.thingspeak.com/update?api_key=' + CONFIG.WRITE_API_KEY;
-      if (d.f1 !== null) url += '&field1=' + d.f1;   // omit -> preserve nothing to send
-      url += '&field2=' + d.f2 + '&field3=' + d.f3;
-
       try {
-        const res  = await fetch(url, { cache: 'no-store' });
+        const res  = await fetch(writeUrl(d.f1, d.f2, d.f3), { cache: 'no-store' });
         const text = (await res.text()).trim();
-        const id   = parseInt(text, 10);
 
         writeQ.lastWriteAt = Date.now();
+
+        // 501 is our own proxy saying it holds no write key; 401/403 is it
+        // rejecting the control token. Retrying either forever would just
+        // spin, so drop the command and say why.
+        if (res.status === 501) {
+          writeQ.desired = null;
+          log('[TS] Proxy has no write key configured — command dropped', 'red');
+          log('[UI] Website light unchanged', 'dim');
+          return;
+        }
+        if (res.status === 401 || res.status === 403) {
+          writeQ.desired = null;
+          log('[TS] Proxy rejected the control token — command dropped', 'red');
+          log('[UI] Website light unchanged', 'dim');
+          return;
+        }
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+
+        const id = parseInt(text, 10);
 
         if (id > 0) {
           rememberOwnWrite(id);
@@ -1844,9 +1907,20 @@
     //  THINGSPEAK READ — field1/field2/field3 only
     // ═══════════════════════════════════════════════════════════════════
 
+    /**
+     * Proxy mode hides the channel and key on the server. Direct mode needs
+     * both here — except the read key, which public channels do not require,
+     * so it is omitted rather than sent empty.
+     */
     function readUrl() {
-      return 'https://api.thingspeak.com/channels/' + CONFIG.CHANNEL_ID +
-             '/feeds/last.json?api_key=' + CONFIG.READ_API_KEY;
+      if (CONFIG.MODE === 'proxy') return API_BASE + '/feed';
+
+      let url = TS_API + '/channels/' + encodeURIComponent(CONFIG.CHANNEL_ID) +
+                '/feeds/last.json';
+      if (CONFIG.READ_API_KEY) {
+        url += '?api_key=' + encodeURIComponent(CONFIG.READ_API_KEY);
+      }
+      return url;
     }
 
     /** Parses a ThingSpeak field. Returns null for null/blank/invalid. */
@@ -1992,6 +2066,129 @@
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    //  CONFIG RESOLUTION
+    //
+    //  Runs once, before the read loop. Order of precedence is explicit
+    //  and every outcome is logged, so which keys are in play is never a
+    //  mystery. Placeholder values from an unconfigured deployment are
+    //  treated as absent.
+    // ═══════════════════════════════════════════════════════════════════
+    const PLACEHOLDERS = [
+      '', 'YOUR_CHANNEL_ID', 'YOUR_READ_API_KEY', 'YOUR_WRITE_API_KEY',
+      'YOURREADKEY', 'YOURWRITEKEY',
+    ];
+
+    function clean(v) {
+      const s = (v === null || v === undefined) ? '' : String(v).trim();
+      return PLACEHOLDERS.indexOf(s) === -1 ? s : '';
+    }
+
+    /** localStorage throws in some privacy modes; never let that stop boot. */
+    function lsGet(k) {
+      try { return localStorage.getItem(k); } catch (e) { return null; }
+    }
+
+    /** Asks our own backend whether it holds the keys. Null = no backend. */
+    async function probeProxy() {
+      // file:// has no server to ask, and the request would just error.
+      if (location.protocol === 'file:') return null;
+      try {
+        const res = await fetch(API_BASE + '/config', { cache: 'no-store' });
+        if (!res.ok) return null;
+        const j = await res.json();
+        return (j && j.proxy) ? j : null;
+      } catch (e) {
+        return null;   // static host: no /api, which is a valid setup
+      }
+    }
+
+    async function resolveConfig() {
+      const q = new URLSearchParams(location.search);
+
+      // ── 1. URL query — an explicit, one-off override ────────────────
+      const qCh = clean(q.get('channel'));
+      if (qCh) {
+        CONFIG.MODE          = 'direct';
+        CONFIG.SOURCE        = 'URL query';
+        CONFIG.CHANNEL_ID    = qCh;
+        CONFIG.READ_API_KEY  = clean(q.get('read_key'));
+        CONFIG.WRITE_API_KEY = clean(q.get('write_key'));
+        return;
+      }
+
+      // ── 2. localStorage — saved per browser ─────────────────────────
+      const lsCh = clean(lsGet('ts_channel'));
+      if (lsCh) {
+        CONFIG.MODE          = 'direct';
+        CONFIG.SOURCE        = 'localStorage';
+        CONFIG.CHANNEL_ID    = lsCh;
+        CONFIG.READ_API_KEY  = clean(lsGet('ts_read_key'));
+        CONFIG.WRITE_API_KEY = clean(lsGet('ts_write_key'));
+        return;
+      }
+
+      // ── 3. Server-held keys — the Vercel path ───────────────────────
+      const proxy = await probeProxy();
+      if (proxy) {
+        CONFIG.MODE           = 'proxy';
+        CONFIG.SOURCE         = 'server (/api/config)';
+        CONFIG.CHANNEL_ID     = clean(proxy.channelId);
+        CONFIG.REQUIRES_TOKEN = Boolean(proxy.requiresToken);
+        CONFIG.TOKEN          = clean(q.get('token')) ||
+                                clean(lsGet('ts_dashboard_token'));
+        return;
+      }
+
+      // ── 4. Nothing ──────────────────────────────────────────────────
+      CONFIG.MODE   = 'unconfigured';
+      CONFIG.SOURCE = 'none';
+    }
+
+    function logConfig() {
+      if (CONFIG.MODE === 'proxy') {
+        log('[CFG] Proxy mode — keys held server-side, ' +
+            'never sent to this browser', 'green');
+        log('[CFG] Channel ' + (CONFIG.CHANNEL_ID || 'hidden') +
+            ' via /api/feed and /api/update', 'dim');
+        if (CONFIG.REQUIRES_TOKEN && !CONFIG.TOKEN) {
+          log('[CFG] This deployment requires a control token — reads work, ' +
+              'but AUTO/ON/OFF will be refused', 'amber');
+          log('[CFG] Fix: localStorage.setItem("ts_dashboard_token", "…") ' +
+              'then reload', 'dim');
+        }
+        return;
+      }
+
+      if (CONFIG.MODE === 'direct') {
+        log('[CFG] Direct mode — calling api.thingspeak.com from the ' +
+            'browser', 'amber');
+        log('[CFG] Channel ' + CONFIG.CHANNEL_ID + ', keys from ' +
+            CONFIG.SOURCE, 'dim');
+        if (!CONFIG.READ_API_KEY) {
+          log('[CFG] No read key — assuming a public channel', 'dim');
+        }
+        if (!CONFIG.WRITE_API_KEY) {
+          log('[CFG] No write key — read-only, AUTO/ON/OFF cannot be sent',
+              'amber');
+        }
+        return;
+      }
+
+      log('[CFG] Not configured — nothing to read, so the poll is idle', 'red');
+      rule();
+      log('Pick either one:', 'grey');
+      log('  A) Deploy on Vercel and set TS_CHANNEL_ID, TS_READ_API_KEY', 'dim');
+      log('     and TS_WRITE_API_KEY in the project env vars.', 'dim');
+      log('  B) Stay static and set the keys in this browser:', 'dim');
+      log('       localStorage.setItem("ts_channel",   "1234567");', 'dim');
+      log('       localStorage.setItem("ts_read_key",  "YOURREADKEY");', 'dim');
+      log('       localStorage.setItem("ts_write_key", "YOURWRITEKEY");', 'dim');
+      log('       location.reload();', 'dim');
+      log('  …or append ?channel=1234567&read_key=…&write_key=… to the URL.',
+          'dim');
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
     //  EVENT WIRING
     // ═══════════════════════════════════════════════════════════════════
     dom.btnAuto.addEventListener('click', clickAuto);
@@ -2010,7 +2207,7 @@
     //  Startup does NOT assume the light is OFF. It stays UNKNOWN and is
     //  clearly labelled until the first valid ThingSpeak read.
     // ═══════════════════════════════════════════════════════════════════
-    (function init() {
+    (async function init() {
       log('================================', 'dim');
       log('  Smart Automatic Light Control', 'green');
       log('  Arduino + ESP8266 + ThingSpeak', 'green');
@@ -2018,14 +2215,35 @@
       log('[UI] Fields: F1=LDR  F2=Relay  F3=LED', 'dim');
       log('[UI] Mode   : AUTO (held locally, not in the cloud)', 'grey');
       log('[UI] Light  : UNKNOWN until the first read', 'grey');
-      log('[TS] Reading every ' + (CONFIG.READ_INTERVAL_MS / 1000) + 's…', 'dim');
       rule();
 
-      dom.chIdDisplay.textContent = CONFIG.CHANNEL_ID;
-      dom.tsChannelLink.href =
-        'https://thingspeak.com/channels/' + CONFIG.CHANNEL_ID;
-
+      // Paint the UI before awaiting anything, so a slow or missing
+      // /api/config never leaves the page blank.
       renderAll();
+
+      await resolveConfig();
+      logConfig();
+
+      dom.chIdDisplay.textContent = CONFIG.CHANNEL_ID || '—';
+      if (CONFIG.CHANNEL_ID) {
+        dom.tsChannelLink.href =
+          'https://thingspeak.com/channels/' + encodeURIComponent(CONFIG.CHANNEL_ID);
+      } else {
+        dom.tsChannelLink.removeAttribute('href');
+      }
+
+      if (CONFIG.MODE === 'unconfigured') {
+        // Polling a channel we do not have would fail every 16 s forever.
+        // Report the link honestly and stop, rather than faking "…".
+        state.linkChecked = true;
+        setCloudConnected(false);
+        renderBadges();
+        return;
+      }
+
+      rule();
+      log('[TS] Reading every ' + (CONFIG.READ_INTERVAL_MS / 1000) + 's…', 'dim');
+
       startReadLoop();
 
       // Re-evaluate the hardware link on its own clock so the badge goes
