@@ -1445,19 +1445,19 @@
     let logLineCount = 0;
 
     function timeNow() {
-      return new Date().toLocaleTimeString('en-GB', { hour12: false });
-    }
+      return new Date().toLocaleTim
 
-    function log(text, cls = 'grey') {
-      const line = document.createElement('div');
-      line.className = 'log-line ' + cls;
-      line.textContent = '[' + timeNow() + ']  ' + text;
-      dom.logBody.appendChild(line);
-      logLineCount++;
+      function log(text, cls = 'grey') {
+        const line = document.createElement('div');
+        line.className = 'log-line ' + cls;
+        line.textContent = '[' + timeNow() + ']  ' + text;
+        dom.logBody.appendChild(line);
+        logLineCount++;
 
-      while (logLineCount > CONFIG.MAX_LOG_LINES) {
-        dom.logBody.removeChild(dom.logBody.firstChild);
-        logLineCount--;
+        while (logLineCount > CONFIG.MAX_LOG_LINES) {
+          dom.logBody.removeChild(dom.logBody.firstChild);
+          logLineCount - eString('en-GB', { hour12: false });
+        } -;
       }
       dom.logBody.scrollTop = dom.logBody.scrollHeight;
     }
